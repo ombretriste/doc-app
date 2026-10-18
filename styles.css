@@ -718,3 +718,9 @@ main {
 .next-list small { font-size: 12px; color: var(--muted); line-height: 1.35; }
 .form-error { min-height: 1em; color: var(--danger); font-size: 13px; }
 .sheet .fld input[type="password"], .sheet .fld input#s-user { font-size: 16px; }
+
+/* iPhone (pantalla completa): iOS difumina una franja justo debajo de la barra de estado (hora,
+   batería). Se baja la barra superior para que el título y los iconos queden fuera. */
+@supports (padding-top: env(safe-area-inset-top)) {
+  .topbar { padding-top: calc(env(safe-area-inset-top) + 14px); }
+}

@@ -1,10 +1,12 @@
 'use strict';
 
 // Versión de la app (se ve en la pantalla de inicio). Arreglos y ajustes: 0.x.y; novedades: 0.x.0.
-const APP_VERSION = '0.1.0';
+const APP_VERSION = '0.2.0';
 const STORAGE_KEY = 'docctrl:v1';
 const DISPLAY_KEY = 'docctrl:display';
 const INSTALL_HINT_KEY = 'docctrl:installHint';
+const NOTIFY_KEY = 'docctrl:notify';
+const SYNC_KEY = 'docctrl:sync';
 
 const ICONS = {
   // Categorías
@@ -46,6 +48,9 @@ const ICONS = {
   download: '<path d="M12 4v11M7.5 10.5L12 15l4.5-4.5"/><path d="M4 17v1.5A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5V17"/>',
   upload: '<path d="M12 15V4M7.5 8.5L12 4l4.5 4.5"/><path d="M4 17v1.5A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5V17"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
+  cloud: '<path d="M7 18.5a4.5 4.5 0 0 1-.6-8.96A6 6 0 0 1 18 9a4.75 4.75 0 0 1-.5 9.5z"/>',
+  refresh: '<path d="M20 12a8 8 0 1 1-2.34-5.66L20 8.5"/><path d="M20 4v4.5h-4.5"/>',
+  logout: '<path d="M14 4h4a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-4"/><path d="M10 16l-4-4 4-4M6 12h10"/>',
 };
 const icon = (name, size = 22) =>
   `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ICONS.doc}</svg>`;
@@ -75,8 +80,11 @@ document.querySelectorAll('[data-logo]').forEach((el) => { el.innerHTML = logoSV
 document.getElementById('app-version').textContent = `Versión ${APP_VERSION}`;
 
 // ---------- Catálogo de partidas ----------
-// Campos: t = text · d = fecha · n = número · tel = teléfono · eur = importe · a = texto largo.
-// `exp: true` marca la fecha que vence (caducidad, ITV, renovación…) y genera avisos.
+// Campos: t = text · d = fecha · n = número · tel = teléfono · eur = importe · a = texto largo · rep = repetición.
+// `exp: true` marca la fecha que vence (caducidad, ITV, renovación…) y genera avisos. Con un campo `rep`
+// (cada cuántos meses se repite), al pasar la fecha se salta sola a la siguiente: recibos, seguros…
+// `lead`: días de antelación con que avisa por defecto ese tipo · `tip`: consejo que acompaña al aviso
+// · `charge`: es un cargo («Cargo en 3 días») en vez de un vencimiento · `titleKey`: campo que da nombre a la partida.
 
 const CATS = {
   id: { label: 'Identidad', icon: 'id' },
@@ -92,38 +100,47 @@ const EXP = (l = 'Caducidad') => F('exp', l, 'd', { exp: true });
 const COMPANY = F('company', 'Compañía');
 const POLICY = F('policy', 'Nº de póliza');
 const PRICE = (l = 'Prima anual') => F('price', l, 'eur');
+const REP = (def = '') => F('rep', 'Se repite', 'rep', { def });
+const REPS = [['', 'No se repite'], ['1', 'Cada mes'], ['2', 'Cada 2 meses'], ['3', 'Cada 3 meses'], ['6', 'Cada 6 meses'], ['12', 'Cada año'], ['24', 'Cada 2 años']];
+const repLabel = (v) => REPS.find(([k]) => k === String(v))?.[1] || '';
+const RENEW_TIP = 'Pide cita previa con tiempo para renovarlo.';
 
 const TYPES = {
-  dni: { cat: 'id', label: 'DNI', fields: [F('num', 'Número'), F('fullname', 'Nombre completo'), F('birth', 'Fecha de nacimiento', 'd'), F('idesp', 'Nº de soporte (IDESP)'), F('issued', 'Expedición', 'd'), EXP()] },
-  passport: { cat: 'id', label: 'Pasaporte', icon: 'passport', fields: [F('num', 'Número'), F('issued', 'Expedición', 'd'), EXP(), F('place', 'Expedido en')] },
-  license: { cat: 'id', label: 'Carnet de conducir', icon: 'license', fields: [F('num', 'Número'), F('classes', 'Permisos (B, A2…)'), F('issued', 'Expedición', 'd'), EXP(), F('points', 'Puntos', 'n')] },
-  nie: { cat: 'id', label: 'NIE / TIE', fields: [F('num', 'Número'), EXP()] },
+  dni: { cat: 'id', label: 'DNI', lead: 90, tip: RENEW_TIP, fields: [F('num', 'Número'), F('fullname', 'Nombre completo'), F('birth', 'Fecha de nacimiento', 'd'), F('idesp', 'Nº de soporte (IDESP)'), F('issued', 'Expedición', 'd'), EXP()] },
+  passport: { cat: 'id', label: 'Pasaporte', icon: 'passport', lead: 90, tip: RENEW_TIP, fields: [F('num', 'Número'), F('issued', 'Expedición', 'd'), EXP(), F('place', 'Expedido en')] },
+  license: { cat: 'id', label: 'Carnet de conducir', icon: 'license', lead: 90, tip: 'Necesitarás un reconocimiento médico en un centro autorizado.', fields: [F('num', 'Número'), F('classes', 'Permisos (B, A2…)'), F('issued', 'Expedición', 'd'), EXP(), F('points', 'Puntos', 'n')] },
+  nie: { cat: 'id', label: 'NIE / TIE', lead: 90, tip: RENEW_TIP, fields: [F('num', 'Número'), EXP()] },
   healthcard: { cat: 'id', label: 'Tarjeta sanitaria', icon: 'health', fields: [F('num', 'Nº de tarjeta'), F('cip', 'Código CIP'), F('center', 'Centro de salud'), F('doctor', 'Médico de cabecera'), F('phone', 'Teléfono de citas', 'tel')] },
-  tse: { cat: 'id', label: 'Tarjeta sanitaria europea', icon: 'health', fields: [F('num', 'Nº de tarjeta'), EXP()] },
+  tse: { cat: 'id', label: 'Tarjeta sanitaria europea', icon: 'health', lead: 30, tip: 'Se renueva gratis en la web de la Seguridad Social.', fields: [F('num', 'Nº de tarjeta'), EXP()] },
   ss: { cat: 'id', label: 'Seguridad Social', icon: 'shield', fields: [F('num', 'Nº de afiliación')] },
 
-  vehicle: { cat: 'car', label: 'Vehículo e ITV', fields: [F('plate', 'Matrícula'), F('model', 'Marca y modelo'), F('vin', 'Nº de bastidor'), F('reg', 'Matriculación', 'd'), EXP('Próxima ITV')] },
-  carins: { cat: 'car', label: 'Seguro del vehículo', icon: 'shield', fields: [COMPANY, POLICY, F('plate', 'Matrícula'), F('assist', 'Asistencia en carretera', 'tel'), PRICE(), EXP('Vencimiento')] },
-  cartax: { cat: 'car', label: 'Impuesto de circulación', icon: 'receipt', fields: [F('plate', 'Matrícula'), F('council', 'Ayuntamiento'), PRICE('Importe'), EXP('Fecha de pago')] },
+  vehicle: { cat: 'car', label: 'Vehículo e ITV', lead: 30, tip: 'Reserva cita en la estación de ITV.', fields: [F('plate', 'Matrícula'), F('model', 'Marca y modelo'), F('vin', 'Nº de bastidor'), F('reg', 'Matriculación', 'd'), EXP('Próxima ITV')] },
+  carins: { cat: 'car', label: 'Seguro del vehículo', icon: 'shield', lead: 30, tip: 'Buen momento para comparar precios.', fields: [COMPANY, POLICY, F('plate', 'Matrícula'), F('assist', 'Asistencia en carretera', 'tel'), PRICE(), EXP('Vencimiento'), REP('12')] },
+  cartax: { cat: 'car', label: 'Impuesto de circulación', icon: 'receipt', lead: 15, charge: true, fields: [F('plate', 'Matrícula'), F('council', 'Ayuntamiento'), PRICE('Importe'), EXP('Fecha de pago'), REP('12')] },
 
-  homeins: { cat: 'home', label: 'Seguro de hogar', icon: 'shield', fields: [COMPANY, POLICY, F('phone', 'Teléfono de siniestros', 'tel'), PRICE(), EXP('Vencimiento')] },
+  homeins: { cat: 'home', label: 'Seguro de hogar', icon: 'shield', lead: 30, tip: 'Buen momento para comparar precios.', fields: [COMPANY, POLICY, F('phone', 'Teléfono de siniestros', 'tel'), PRICE(), EXP('Vencimiento'), REP('12')] },
   rent: { cat: 'home', label: 'Alquiler o hipoteca', icon: 'key', fields: [F('entity', 'Banco o propietario'), F('ref', 'Nº de contrato'), F('price', 'Cuota mensual', 'eur'), F('start', 'Inicio', 'd'), EXP('Fin o revisión')] },
-  utility: { cat: 'home', label: 'Suministro (luz, gas, agua, internet)', icon: 'bolt', fields: [F('service', 'Servicio'), COMPANY, F('contract', 'Nº de contrato'), F('cups', 'CUPS o nº de cliente'), F('phone', 'Teléfono de averías', 'tel'), F('price', 'Importe aproximado', 'eur')] },
-  boiler: { cat: 'home', label: 'Revisión de caldera o gas', icon: 'flame', fields: [COMPANY, F('phone', 'Teléfono', 'tel'), F('last', 'Última revisión', 'd'), EXP('Próxima revisión')] },
+  utility: { cat: 'home', label: 'Suministro (luz, gas, agua, internet)', titleKey: 'service', icon: 'bolt', fields: [F('service', 'Servicio'), COMPANY, F('contract', 'Nº de contrato'), F('cups', 'CUPS o nº de cliente'), F('phone', 'Teléfono de averías', 'tel'), F('price', 'Importe aproximado', 'eur')] },
+  boiler: { cat: 'home', label: 'Revisión de caldera o gas', icon: 'flame', lead: 30, fields: [COMPANY, F('phone', 'Teléfono', 'tel'), F('last', 'Última revisión', 'd'), EXP('Próxima revisión'), REP('12')] },
 
-  medins: { cat: 'health', label: 'Seguro médico', icon: 'shield', fields: [COMPANY, POLICY, F('card', 'Nº de tarjeta'), F('phone', 'Teléfono', 'tel'), PRICE(), EXP('Vencimiento')] },
-  lifeins: { cat: 'health', label: 'Seguro de vida', icon: 'shield', fields: [COMPANY, POLICY, F('capital', 'Capital asegurado', 'eur'), F('benef', 'Beneficiarios'), PRICE(), EXP('Vencimiento')] },
+  medins: { cat: 'health', label: 'Seguro médico', icon: 'shield', lead: 30, fields: [COMPANY, POLICY, F('card', 'Nº de tarjeta'), F('phone', 'Teléfono', 'tel'), PRICE(), EXP('Vencimiento'), REP('12')] },
+  lifeins: { cat: 'health', label: 'Seguro de vida', icon: 'shield', lead: 30, fields: [COMPANY, POLICY, F('capital', 'Capital asegurado', 'eur'), F('benef', 'Beneficiarios'), PRICE(), EXP('Vencimiento'), REP('12')] },
   medfile: { cat: 'health', label: 'Ficha médica', icon: 'heart', fields: [F('blood', 'Grupo sanguíneo'), F('allergies', 'Alergias', 'a'), F('meds', 'Medicación habitual', 'a'), F('contact', 'Contacto de emergencia'), F('ephone', 'Teléfono de emergencia', 'tel')] },
 
+  receipt: { cat: 'money', label: 'Recibo o pago periódico', titleKey: 'concept', icon: 'receipt', lead: 3, charge: true, tip: 'Comprueba que haya saldo en la cuenta.', fields: [F('concept', 'Concepto (IBI, comunidad, colegio…)'), F('issuer', 'Emisor'), F('price', 'Importe', 'eur'), EXP('Próximo cargo'), REP('1'), F('account', 'Cuenta de cargo')] },
   bank: { cat: 'money', label: 'Cuenta bancaria', icon: 'bank', fields: [F('bank', 'Banco'), F('iban', 'IBAN'), F('holders', 'Titulares'), F('phone', 'Teléfono del banco', 'tel')] },
-  card: { cat: 'money', label: 'Tarjeta bancaria', icon: 'card', note: 'Por seguridad, guarda solo los últimos 4 dígitos: nunca el número completo, el PIN ni el CVV.', fields: [F('bank', 'Banco'), F('last4', 'Últimos 4 dígitos', 'n', { max: 4 }), EXP(), F('phone', 'Teléfono para bloquearla', 'tel')] },
+  card: { cat: 'money', label: 'Tarjeta bancaria', icon: 'card', lead: 30, tip: 'El banco suele mandar la nueva: actualízala donde pagues con ella.', note: 'Por seguridad, guarda solo los últimos 4 dígitos: nunca el número completo, el PIN ni el CVV.', fields: [F('bank', 'Banco'), F('last4', 'Últimos 4 dígitos', 'n', { max: 4 }), EXP(), F('phone', 'Teléfono para bloquearla', 'tel')] },
 
-  warranty: { cat: 'other', label: 'Garantía', icon: 'tag', fields: [F('product', 'Producto'), F('shop', 'Tienda'), F('bought', 'Fecha de compra', 'd'), F('price', 'Precio', 'eur'), EXP('Fin de la garantía')] },
-  subscription: { cat: 'other', label: 'Suscripción', icon: 'repeat', fields: [F('service', 'Servicio'), F('price', 'Importe', 'eur'), F('period', 'Periodicidad (mensual, anual…)'), EXP('Próxima renovación')] },
-  pet: { cat: 'other', label: 'Mascota', icon: 'paw', fields: [F('petname', 'Nombre'), F('chip', 'Nº de microchip'), F('vet', 'Veterinario'), F('phone', 'Teléfono del veterinario', 'tel'), EXP('Próxima vacuna')] },
-  membership: { cat: 'other', label: 'Carnet de socio', icon: 'ticket', fields: [F('entity', 'Entidad (gimnasio, biblioteca…)'), F('num', 'Nº de socio'), EXP()] },
-  generic: { cat: 'other', label: 'Otro documento', icon: 'doc', fields: [F('num', 'Número o referencia'), EXP()] },
+  warranty: { cat: 'other', label: 'Garantía', titleKey: 'product', icon: 'tag', lead: 30, tip: 'Si falla algo, reclámalo antes de que acabe.', fields: [F('product', 'Producto'), F('shop', 'Tienda'), F('bought', 'Fecha de compra', 'd'), F('price', 'Precio', 'eur'), EXP('Fin de la garantía')] },
+  subscription: { cat: 'other', label: 'Suscripción', titleKey: 'service', icon: 'repeat', lead: 7, charge: true, tip: '¿La sigues usando? Si no, cancélala antes.', fields: [F('service', 'Servicio'), F('price', 'Importe', 'eur'), EXP('Próxima renovación'), REP('1')] },
+  pet: { cat: 'other', label: 'Mascota', titleKey: 'petname', icon: 'paw', lead: 15, tip: 'Pide cita en el veterinario.', fields: [F('petname', 'Nombre'), F('chip', 'Nº de microchip'), F('vet', 'Veterinario'), F('phone', 'Teléfono del veterinario', 'tel'), EXP('Próxima vacuna'), REP('12')] },
+  membership: { cat: 'other', label: 'Carnet de socio', titleKey: 'entity', icon: 'ticket', lead: 15, fields: [F('entity', 'Entidad (gimnasio, biblioteca…)'), F('num', 'Nº de socio'), EXP()] },
+  generic: { cat: 'other', label: 'Otro documento', icon: 'doc', fields: [F('num', 'Número o referencia'), EXP(), REP()] },
 };
+// Antelación de los avisos: la de la partida, la de su tipo o la general. 'off' = sin avisos.
+const LEADS = [0, 1, 3, 7, 15, 30, 60, 90, 180];
+const leadText = (n) => (n === 0 ? 'El mismo día' : n === 1 ? '1 día antes' : `${n} días antes`);
+const itemLead = (it) => (it.lead === 'off' ? null : Number.isFinite(it.lead) ? it.lead : TYPES[it.type].lead ?? data.warnDays);
 const typeIcon = (t) => TYPES[t]?.icon || CATS[TYPES[t]?.cat]?.icon || 'doc';
 
 // ---------- Utilidades ----------
@@ -169,23 +186,26 @@ function toast(text) {
   setTimeout(() => el.remove(), 2600);
 }
 
-// ---------- Fotos (IndexedDB) ----------
-// Los datos van en localStorage; las fotos, comprimidas, en IndexedDB (clave = id de la foto).
+// ---------- Fotos y avisos (IndexedDB) ----------
+// Los datos van en localStorage; las fotos, comprimidas, en IndexedDB («files», clave = id de la foto).
+// «meta» guarda la lista de avisos ya calculada, que es lo que lee el service worker al llegar un push.
 
 let dbPromise;
 function openDB() {
   return (dbPromise ??= new Promise((resolve, reject) => {
-    const req = indexedDB.open('docctrl', 1);
-    req.onupgradeneeded = () => req.result.createObjectStore('files');
+    const req = indexedDB.open('docctrl', 2);
+    req.onupgradeneeded = () => {
+      for (const name of ['files', 'meta']) if (!req.result.objectStoreNames.contains(name)) req.result.createObjectStore(name);
+    };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
   }));
 }
-async function idb(mode, fn) {
+async function idb(mode, fn, store = 'files') {
   const db = await openDB();
   return new Promise((resolve, reject) => {
-    const tx = db.transaction('files', mode);
-    const req = fn(tx.objectStore('files'));
+    const tx = db.transaction(store, mode);
+    const req = fn(tx.objectStore(store));
     tx.oncomplete = () => resolve(req?.result);
     tx.onerror = () => reject(tx.error);
   });
@@ -194,6 +214,8 @@ const putFile = (id, blob) => idb('readwrite', (s) => s.put(blob, id));
 const getFile = (id) => idb('readonly', (s) => s.get(id));
 const delFile = (id) => idb('readwrite', (s) => s.delete(id));
 const clearFiles = () => idb('readwrite', (s) => s.clear());
+const kvGet = (k) => idb('readonly', (s) => s.get(k), 'meta');
+const kvSet = (k, v) => idb('readwrite', (s) => s.put(v, k), 'meta');
 
 const urlCache = new Map();
 async function fileURL(id) {
@@ -231,57 +253,89 @@ async function compressImage(file) {
 }
 
 // ---------- Datos ----------
-// people: [{id, name}] · items: [{id, type, person ('' = común), label, f: {campo: valor}, notes, photos: [id], upd}]
-// warnDays: con cuántos días de antelación se avisa de un vencimiento.
+// people: [{id, name, at}] · items: [{id, type, person ('' = común), label, f: {campo: valor}, notes, photos: [id],
+// lead (días | 'off' | sin poner = el del tipo), upd (AAAA-MM-DD), at (ms del último cambio)}]
+// deleted: {id: ms} de partidas y personas borradas (para que la sincronización respete los borrados).
+// warnDays: antelación general, para los tipos que no tienen una propia · settingsAt: cuándo se cambió.
 
 function cleanData(d) {
-  const people = Array.isArray(d?.people) ? d.people.filter((p) => p?.id && p.name).map((p) => ({ id: String(p.id), name: String(p.name) })) : [];
-  const ids = new Set(people.map((p) => p.id));
+  const people = Array.isArray(d?.people) ? d.people.filter((p) => p?.id && p.name).map((p) => ({ id: String(p.id), name: String(p.name), at: Number(p.at) || 0 })) : [];
   const items = (Array.isArray(d?.items) ? d.items : []).filter((it) => it?.id && TYPES[it.type]).map((it) => ({
     id: String(it.id),
     type: it.type,
-    person: ids.has(it.person) ? it.person : '',
+    person: typeof it.person === 'string' ? it.person : '',
     label: String(it.label || ''),
     f: Object.fromEntries(Object.entries(it.f || {}).filter(([, v]) => v !== '' && v != null).map(([k, v]) => [k, String(v)])),
     notes: String(it.notes || ''),
     photos: Array.isArray(it.photos) ? it.photos.map(String) : [],
+    ...(it.lead === 'off' || (Number.isFinite(it.lead) && it.lead >= 0) ? { lead: it.lead } : {}),
     upd: it.upd || todayISO(),
+    at: Number(it.at) || 0,
   }));
+  const deleted = Object.fromEntries(Object.entries(d?.deleted || {}).filter(([, v]) => Number.isFinite(v)));
   const warnDays = Number.isFinite(Number(d?.warnDays)) && Number(d.warnDays) > 0 ? Number(d.warnDays) : 60;
-  return { people: people.length || d?.people ? people : [{ id: 'p1', name: 'Yo' }], items, warnDays };
+  return { people: people.length || d?.people ? people : [{ id: 'p1', name: 'Yo', at: 0 }], items, deleted, warnDays, settingsAt: Number(d?.settingsAt) || 0 };
 }
 
 let data = cleanData(load(STORAGE_KEY, null));
 let filter = 'all'; // 'all' · '' (común) · id de persona
 let query = '';
 
+// Guarda en el dispositivo, recalcula los avisos y sube los cambios a la nube (si está activada)
 function persist() {
   if (!save(STORAGE_KEY, data)) toast('No se han podido guardar los datos en este dispositivo.');
+  queueReminders();
+  queueSync();
 }
 
-const personName = (id) => (id ? data.people.find((p) => p.id === id)?.name || '' : 'Común');
-const itemTitle = (it) => it.label || TYPES[it.type].label;
+const personName = (id) => (id ? data.people.find((p) => p.id === id)?.name || 'Común' : 'Común');
+const itemTitle = (it) => it.label || it.f[TYPES[it.type].titleKey] || TYPES[it.type].label;
 // Dato que identifica la partida en la lista: el primer campo relleno que no sea fecha
 function itemKeyValue(it) {
-  const f = TYPES[it.type].fields.find((x) => x.t !== 'd' && x.t !== 'a' && it.f[x.k]);
-  return f ? (f.k === 'last4' ? `•••• ${it.f[f.k]}` : it.f[f.k]) : '';
+  const f = TYPES[it.type].fields.find((x) => x.t !== 'd' && x.t !== 'a' && x.t !== 'rep' && x.k !== TYPES[it.type].titleKey && it.f[x.k]);
+  return f ? (f.k === 'last4' ? `•••• ${it.f[f.k]}` : f.t === 'eur' ? `${it.f[f.k]} €` : it.f[f.k]) : '';
 }
 
-// Estado del vencimiento: vencido, próximo (dentro del aviso) o en regla
+// Fechas que se repiten: la ocurrencia n se calcula desde la fecha original (31 de enero + 1 mes = 28/29 de febrero)
+function addMonths(iso, months) {
+  const [y, m, d] = iso.split('-').map(Number);
+  const first = new Date(Date.UTC(y, m - 1 + months, 1));
+  const last = new Date(Date.UTC(first.getUTCFullYear(), first.getUTCMonth() + 1, 0)).getUTCDate();
+  return `${first.getUTCFullYear()}-${pad(first.getUTCMonth() + 1)}-${pad(Math.min(d, last))}`;
+}
+function addDays(iso, n) {
+  const [y, m, d] = iso.split('-').map(Number);
+  const t = new Date(Date.UTC(y, m - 1, d + n));
+  return `${t.getUTCFullYear()}-${pad(t.getUTCMonth() + 1)}-${pad(t.getUTCDate())}`;
+}
+// Ocurrencias de una fecha (que se repite cada `rep` meses) desde `from` hasta `to`, como mucho `max`
+function occurrences(date, rep, from, to, max = 60) {
+  if (!rep) return date >= from && date <= to ? [date] : [];
+  const out = [];
+  for (let n = 0, d = date; d <= to && out.length < max && n < 2400; n++, d = addMonths(date, n * rep)) if (d >= from) out.push(d);
+  return out;
+}
+
+// Estado del vencimiento: vencido, próximo (dentro del aviso) o en regla. Si se repite, la próxima fecha.
 function expiry(it) {
-  const f = TYPES[it.type].fields.find((x) => x.exp);
-  const date = f && it.f[f.k];
-  if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
+  const type = TYPES[it.type];
+  const f = type.fields.find((x) => x.exp);
+  const base = f && it.f[f.k];
+  if (!base || !/^\d{4}-\d{2}-\d{2}$/.test(base)) return null;
+  const rep = Number(it.f.rep) || 0;
+  const date = rep ? occurrences(base, rep, todayISO(), '9999-12-31', 1)[0] || base : base;
   const days = daysUntil(date);
-  const cls = days < 0 ? 'expired' : days <= data.warnDays ? 'soon' : 'ok';
-  return { date, days, cls, label: f.l };
+  const lead = itemLead(it);
+  const cls = days < 0 ? 'expired' : lead != null && days <= lead ? 'soon' : 'ok';
+  return { date, days, cls, label: f.l, rep, charge: !!type.charge };
 }
 function expiryText(e) {
+  const w = e.charge ? 'Cargo' : 'Vence';
   if (e.days < 0) return -e.days <= 60 ? `Vencido hace ${plural(-e.days, 'día', 'días')}` : `Vencido el ${fmtDate(e.date)}`;
-  if (e.days === 0) return 'Vence hoy';
-  if (e.days === 1) return 'Vence mañana';
-  if (e.cls === 'soon') return `Vence en ${e.days} días`;
-  return `Hasta el ${fmtDate(e.date)}`;
+  if (e.days === 0) return `${w} hoy`;
+  if (e.days === 1) return `${w} mañana`;
+  if (e.cls === 'soon') return `${w} en ${e.days} días`;
+  return `${e.charge ? 'Próximo cargo' : 'Hasta'} el ${fmtDate(e.date)}`;
 }
 
 function visibleItems() {
@@ -318,7 +372,7 @@ function renderSummary() {
     </div>
     <dl class="tiles">
       <div class="${expired.length ? 't-expired' : ''}"><dt>Vencidos</dt><dd>${expired.length}</dd></div>
-      <div class="${soon.length ? 't-soon' : ''}"><dt>Próx. ${data.warnDays} d</dt><dd>${soon.length}</dd></div>
+      <div class="${soon.length ? 't-soon' : ''}"><dt>Próximos</dt><dd>${soon.length}</dd></div>
       <div><dt>Partidas</dt><dd>${items.length}</dd></div>
     </dl>
     ${n ? `<ul class="upcoming">${attention.slice(0, 5).map(({ it, e }) => `
@@ -340,7 +394,7 @@ function renderPeople() {
 function itemCard(it) {
   const e = expiry(it);
   const type = TYPES[it.type];
-  const sub = [it.label ? type.label : '', filter === 'all' ? personName(it.person) : '', itemKeyValue(it)].filter(Boolean).join(' · ');
+  const sub = [itemTitle(it) !== type.label ? type.label : '', filter === 'all' ? personName(it.person) : '', itemKeyValue(it)].filter(Boolean).join(' · ');
   return `
     <button type="button" class="item cat-${type.cat}" data-open="${it.id}">
       <span class="item-icon">${icon(typeIcon(it.type), 22)}</span>
@@ -427,9 +481,12 @@ function openEditor(id, typeKey) {
   const sheet = openSheet('editor-sheet tall', type.label);
 
   const field = (f) => {
-    const v = esc(it?.f[f.k] ?? '');
+    const raw = it ? it.f[f.k] ?? '' : f.def ?? '';
+    const v = esc(raw);
     const input = f.t === 'a'
       ? `<textarea data-k="${f.k}" rows="2">${v}</textarea>`
+      : f.t === 'rep'
+      ? `<select data-k="${f.k}">${REPS.map(([k, l]) => `<option value="${k}" ${String(raw) === k ? 'selected' : ''}>${l}</option>`).join('')}</select>`
       : `<input data-k="${f.k}" type="${f.t === 'd' ? 'date' : f.t === 'tel' ? 'tel' : 'text'}" ${f.t === 'n' ? 'inputmode="numeric"' : f.t === 'eur' ? 'inputmode="decimal"' : ''} ${f.max ? `maxlength="${f.max}"` : ''} value="${v}" autocomplete="off">`;
     return `<label class="fld ${f.t === 'a' ? 'wide' : ''} ${f.exp ? 'is-exp' : ''}"><span>${esc(f.l)}${f.t === 'eur' ? ' (€)' : ''}${f.exp ? ` ${icon('bell', 12)}` : ''}</span>${input}</label>`;
   };
@@ -448,6 +505,11 @@ function openEditor(id, typeKey) {
     <div class="fields">
       <label class="fld wide"><span>Nombre (opcional)</span><input id="ed-label" type="text" value="${esc(it?.label || '')}" placeholder="${esc(type.label)}" autocomplete="off"></label>
       ${type.fields.map(field).join('')}
+      ${type.fields.some((f) => f.exp) ? `<label class="fld wide"><span>Avisar ${icon('bell', 12)}</span><select id="ed-lead">
+        <option value="" ${it?.lead == null ? 'selected' : ''}>Automático (${leadText(type.lead ?? data.warnDays)})</option>
+        ${LEADS.map((n) => `<option value="${n}" ${it?.lead === n ? 'selected' : ''}>${leadText(n)}</option>`).join('')}
+        <option value="off" ${it?.lead === 'off' ? 'selected' : ''}>Sin avisos</option>
+      </select></label>` : ''}
     </div>
     ${type.note ? `<p class="muted small type-note">${esc(type.note)}</p>` : ''}
     <p class="opt-label">Fotos</p>
@@ -497,8 +559,10 @@ function openEditor(id, typeKey) {
     const keep = new Set(editorPhotos.map((p) => p.id));
     for (const old of it?.photos || []) if (!keep.has(old)) { delFile(old).catch(() => {}); urlCache.delete(old); }
     editorPhotos.filter((p) => p.blob).forEach((p) => urlCache.set(p.id, p.url));
-    const rec = { id: it?.id || uid(), type: tkey, person, label, f, notes, photos: editorPhotos.map((p) => p.id), upd: todayISO() };
-    if (it) Object.assign(it, rec);
+    const leadVal = sheet.querySelector('#ed-lead')?.value ?? '';
+    const rec = { id: it?.id || uid(), type: tkey, person, label, f, notes, photos: editorPhotos.map((p) => p.id), upd: todayISO(), at: Date.now() };
+    if (leadVal !== '') rec.lead = leadVal === 'off' ? 'off' : Number(leadVal);
+    if (it) { delete it.lead; Object.assign(it, rec); }
     else data.items.push(rec);
     persist();
     editorPhotos = null;
@@ -511,6 +575,7 @@ function openEditor(id, typeKey) {
     if (!confirm(`¿Eliminar «${itemTitle(it)}» y sus fotos? No se puede deshacer.`)) return;
     it.photos.forEach((p) => { delFile(p).catch(() => {}); urlCache.delete(p); });
     data.items = data.items.filter((x) => x !== it);
+    data.deleted[it.id] = Date.now();
     persist();
     closeSheet();
     render();
@@ -541,16 +606,17 @@ function openDetail(id) {
   const type = TYPES[it.type];
   const e = expiry(it);
   const sheet = openSheet('detail-sheet tall', itemTitle(it));
-  const value = (f, v) => (f.t === 'd' ? fmtDate(v) : f.t === 'eur' ? `${v} €` : f.k === 'last4' ? `•••• ${v}` : v);
+  const value = (f, v) => (f.t === 'd' ? fmtDate(v) : f.t === 'eur' ? `${v} €` : f.t === 'rep' ? repLabel(v) : f.k === 'last4' ? `•••• ${v}` : v);
+  const lead = itemLead(it);
   const rows = type.fields.filter((f) => it.f[f.k]);
   sheet.innerHTML = `
     <div class="sheet-head cat-${type.cat}">
       <span class="item-icon">${icon(typeIcon(it.type), 22)}</span>
       <div class="head-text"><h2 class="sheet-title">${esc(itemTitle(it))}</h2>
-        <p class="muted small">${esc([it.label ? type.label : '', personName(it.person)].filter(Boolean).join(' · '))}</p></div>
+        <p class="muted small">${esc([itemTitle(it) !== type.label ? type.label : '', personName(it.person)].filter(Boolean).join(' · '))}</p></div>
       <button class="icon-btn sm" type="button" data-close aria-label="Cerrar">${icon('close', 18)}</button>
     </div>
-    ${e ? `<div class="exp-banner ${e.cls}">${icon('bell', 18)}<span><b>${esc(expiryText(e))}</b><small>${esc(e.label)}: ${fmtDate(e.date)}</small></span></div>` : ''}
+    ${e ? `<div class="exp-banner ${e.cls}">${icon('bell', 18)}<span><b>${esc(expiryText(e))}</b><small>${esc(e.label)}: ${fmtDate(e.date)}${e.rep ? ` · ${repLabel(e.rep).toLowerCase()}` : ''} · ${lead == null ? 'sin avisos' : `aviso ${leadText(lead).toLowerCase()}`}</small></span></div>` : ''}
     ${rows.length ? `<dl class="facts">${rows.map((f) => `
       <div class="fact ${f.t === 'a' ? 'wide' : ''}">
         <dt>${esc(f.l)}</dt>
@@ -567,7 +633,7 @@ function openDetail(id) {
   hydratePhotos(sheet);
   sheet.querySelector('[data-close]').addEventListener('click', closeSheet);
   sheet.querySelector('#dt-edit').addEventListener('click', () => openEditor(it.id));
-  sheet.querySelector('#dt-ics')?.addEventListener('click', () => downloadICS(it, e));
+  sheet.querySelector('#dt-ics')?.addEventListener('click', () => downloadICS([it]));
   sheet.querySelectorAll('[data-copy]').forEach((b) => b.addEventListener('click', async () => {
     try {
       await navigator.clipboard.writeText(b.dataset.copy);
@@ -603,28 +669,38 @@ function openViewer(photos, start) {
   show();
 }
 
-// ---------- Recordatorio en el calendario (.ics) ----------
-// Evento de día completo en la fecha de vencimiento, con avisos con la antelación elegida y una semana antes.
+// ---------- Recordatorios en el calendario (.ics) ----------
+// Un evento de día completo por vencimiento (con repetición si la tiene) y avisos con la antelación
+// de cada partida y el día anterior. Sirve para una partida o para todas a la vez.
 
-function downloadICS(it, e) {
+function icsEvent(it, stamp) {
+  const e = expiry(it);
+  if (!e) return [];
   const d = e.date.replace(/-/g, '');
-  const next = new Date(`${e.date}T12:00:00`);
-  next.setDate(next.getDate() + 1);
-  const d2 = `${next.getFullYear()}${pad(next.getMonth() + 1)}${pad(next.getDate())}`;
-  const icsEsc = (s) => String(s).replace(/[\\;,]/g, (c) => `\\${c}`).replace(/\n/g, '\\n');
+  const d2 = addDays(e.date, 1).replace(/-/g, '');
+  const icsEsc = (s) => String(s).replace(/[\;,]/g, (c) => `\\${c}`).replace(/\n/g, '\\n');
   const who = it.person ? ` (${personName(it.person)})` : '';
-  const summary = `Vence: ${itemTitle(it)}${who}`;
-  const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+/, '');
+  const summary = `${e.charge ? 'Cargo' : 'Vence'}: ${itemTitle(it)}${who}`;
+  const lead = itemLead(it);
   const alarm = (days) => ['BEGIN:VALARM', 'ACTION:DISPLAY', `DESCRIPTION:${icsEsc(summary)}`, `TRIGGER:-P${days}D`, 'END:VALARM'];
-  const lines = [
-    'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//OmT Finance//DocCTRL//ES', 'CALSCALE:GREGORIAN',
-    'BEGIN:VEVENT', `UID:${it.id}-${d}@docctrl`, `DTSTAMP:${stamp}`,
+  const tip = TYPES[it.type].tip ? ` ${TYPES[it.type].tip}` : '';
+  return [
+    'BEGIN:VEVENT', `UID:${it.id}@docctrl`, `DTSTAMP:${stamp}`,
     `DTSTART;VALUE=DATE:${d}`, `DTEND;VALUE=DATE:${d2}`,
-    `SUMMARY:${icsEsc(summary)}`, `DESCRIPTION:${icsEsc(`${e.label} de ${TYPES[it.type].label}. Recordatorio creado con DocCTRL.`)}`,
-    ...alarm(data.warnDays), ...(data.warnDays > 7 ? alarm(7) : []),
-    'END:VEVENT', 'END:VCALENDAR',
+    ...(e.rep ? [`RRULE:FREQ=MONTHLY;INTERVAL=${e.rep}`] : []),
+    `SUMMARY:${icsEsc(summary)}`, `DESCRIPTION:${icsEsc(`${e.label} de ${TYPES[it.type].label}.${tip} Creado con DocCTRL.`)}`,
+    ...(lead == null ? [] : [...alarm(lead), ...(lead > 1 ? alarm(1) : [])]),
+    'END:VEVENT',
   ];
-  const file = new File([lines.join('\r\n') + '\r\n'], `docctrl-${normalize(itemTitle(it)).replace(/[^a-z0-9]+/g, '-')}.ics`, { type: 'text/calendar' });
+}
+
+function downloadICS(items) {
+  const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+/, '');
+  const events = items.flatMap((it) => icsEvent(it, stamp));
+  if (!events.length) return toast('No hay fechas que añadir al calendario.');
+  const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//OmT Finance//DocCTRL//ES', 'CALSCALE:GREGORIAN', ...events, 'END:VCALENDAR'];
+  const name = items.length === 1 ? `docctrl-${normalize(itemTitle(items[0])).replace(/[^a-z0-9]+/g, '-')}.ics` : `docctrl-vencimientos-${todayISO()}.ics`;
+  const file = new File([lines.join('\r\n') + '\r\n'], name, { type: 'text/calendar' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(file);
   a.download = file.name;
@@ -632,7 +708,7 @@ function downloadICS(it, e) {
   setTimeout(() => URL.revokeObjectURL(a.href), 4000);
 }
 
-// ---------- Personas y aviso (menú ⋯) ----------
+// ---------- Personas (menú ⋯) ----------
 
 function openPeopleSheet() {
   const sheet = openSheet('people-sheet', 'Personas');
@@ -652,19 +728,21 @@ function openPeopleSheet() {
       <div class="body-actions"><button class="done-btn" type="button" data-done>Listo</button></div>`;
     sheet.querySelectorAll('.person-row').forEach((row) => {
       const p = data.people.find((x) => x.id === row.dataset.id);
-      row.querySelector('input').addEventListener('input', (e) => { if (e.target.value.trim()) { p.name = e.target.value.trim(); persist(); render(); } });
+      row.querySelector('input').addEventListener('input', (e) => { if (e.target.value.trim()) { p.name = e.target.value.trim(); p.at = Date.now(); persist(); render(); } });
       row.querySelector('.alw-del').addEventListener('click', () => {
         const n = data.items.filter((it) => it.person === p.id).length;
         if (n && !confirm(`${p.name} tiene ${plural(n, 'partida', 'partidas')}. Pasarán a «Común». ¿Continuar?`)) return;
-        data.items.forEach((it) => { if (it.person === p.id) it.person = ''; });
+        const now = Date.now();
+        data.items.forEach((it) => { if (it.person === p.id) { it.person = ''; it.at = now; } });
         data.people = data.people.filter((x) => x !== p);
+        data.deleted[p.id] = now;
         if (filter === p.id) filter = 'all';
         persist(); render(); draw();
       });
     });
     sheet.querySelector('#pp-add').addEventListener('click', () => {
       const id = uid();
-      data.people.push({ id, name: `Persona ${data.people.length + 1}` });
+      data.people.push({ id, name: `Persona ${data.people.length + 1}`, at: Date.now() });
       persist(); render(); draw();
       const input = sheet.querySelector(`.person-row[data-id="${id}"] input`);
       input.focus();
@@ -675,20 +753,224 @@ function openPeopleSheet() {
   draw();
 }
 
-function openWarnSheet() {
-  const sheet = openSheet('warn-sheet', 'Aviso de vencimientos');
+// ---------- Avisos (notificaciones push) ----------
+// Mismo diseño que TaskCTRL: la app calcula los avisos de los próximos 400 días, guarda su texto en
+// IndexedDB (lo lee el service worker) y sube al servidor SOLO los días en que toca avisar. Ese día el
+// servidor manda un push vacío y el service worker compone la notificación con los datos del móvil.
+
+const AHEAD_DAYS = 400;
+const LATE_DAYS = 3; // un aviso que no llegó (móvil apagado…) aún se muestra hasta 3 días después
+const PUSH_HOUR_UTC = 6; // los días de aviso se suben a las 6:00 UTC (8:00 en verano, 7:00 en invierno)
+
+// Lista de avisos: [{k: clave única, d: día del aviso, t: título, b: texto, id: partida}]
+function reminderList() {
+  const today = todayISO();
+  const from = addDays(today, -LATE_DAYS);
+  const to = addDays(today, AHEAD_DAYS);
+  const out = [];
+  for (const it of data.items) {
+    const type = TYPES[it.type];
+    const f = type.fields.find((x) => x.exp);
+    const base = f && it.f[f.k];
+    const lead = itemLead(it);
+    if (!base || !/^\d{4}-\d{2}-\d{2}$/.test(base) || lead == null) continue;
+    const rep = Number(it.f.rep) || 0;
+    const who = it.person ? ` · ${personName(it.person)}` : '';
+    // Avisos: con la antelación elegida, una semana antes (si la antelación es mayor) y el mismo día
+    const offsets = [...new Set([lead, lead > 14 ? 7 : null, 0].filter((x) => x != null))];
+    for (const due of occurrences(base, rep, from, addDays(to, lead), 30)) {
+      for (const off of offsets) {
+        const d = addDays(due, -off);
+        // Si un aviso no llegó, se recupera solo el del mismo día (los de antes ya dirían una fecha desfasada)
+        if (d < (off === 0 ? from : today) || d > to) continue;
+        const w = type.charge ? 'Cargo' : 'Vence';
+        const when = off === 0 ? `${w} hoy` : off === 1 ? `${w} mañana` : `${w} en ${off} días`;
+        out.push({
+          k: `${it.id}:${due}:${off}`,
+          d,
+          t: `${itemTitle(it)}${who}`,
+          b: `${when} (${fmtDate(due)}).${type.tip && off > 0 ? ` ${type.tip}` : ''}`,
+          id: it.id,
+        });
+      }
+    }
+  }
+  return out.sort((a, b) => (a.d < b.d ? -1 : a.d > b.d ? 1 : 0)).slice(0, 800);
+}
+
+let meta = {}; // { device, subscribed } (en IndexedDB, compartido con el service worker)
+// Los avisos se activan en cada dispositivo por separado: no se sincronizan
+let notifyOn = load(NOTIFY_KEY, false) === true;
+const setNotify = (on) => { notifyOn = on; save(NOTIFY_KEY, on); };
+const ua = navigator.userAgent;
+// El iPad con iPadOS se identifica como Mac, pero tiene pantalla táctil
+const isIOS = /iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+const isAndroid = /Android/.test(ua);
+const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+const canNotify = () => 'Notification' in window && 'serviceWorker' in navigator;
+const canPush = () => canNotify() && 'PushManager' in window;
+let serverOK = null; // null: sin comprobar · true/false
+
+async function pushApi(body) {
+  const res = await fetch('api/push', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const out = await res.json().catch(() => ({}));
+  if (!res.ok) throw Object.assign(new Error(out.error || `http ${res.status}`), { status: res.status });
+  return out;
+}
+async function checkServer() {
+  try {
+    const res = await fetch('api/push', { cache: 'no-store' });
+    serverOK = res.ok && (await res.json()).configured === true;
+  } catch (_) {
+    serverOK = false;
+  }
+  return serverOK;
+}
+const randomHex = (n) => [...crypto.getRandomValues(new Uint8Array(n))].map((b) => b.toString(16).padStart(2, '0')).join('');
+const unb64u = (s) => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((s.length + 3) % 4)), (c) => c.charCodeAt(0));
+async function saveMeta(patch) {
+  meta = { ...meta, ...patch };
+  await kvSet('meta', meta).catch(() => {});
+}
+
+// Guarda la lista para el service worker y sube los días de aviso al servidor
+async function storeReminders() {
+  const list = reminderList();
+  await kvSet('reminders', list).catch(() => {});
+  if (!meta.subscribed || !notifyOn) return;
+  // Los días ya pasados (o hoy) solo si les queda algún aviso por mostrar
+  const today = todayISO();
+  const shown = new Set((await kvGet('shown').catch(() => null)) || []);
+  const times = [...new Set(list.filter((r) => r.d > today || !shown.has(r.k)).map((r) => r.d))].map((d) => {
+    const [y, m, dd] = d.split('-').map(Number);
+    return Math.max(Date.UTC(y, m - 1, dd, PUSH_HOUR_UTC), Date.now() + 60e3); // los de hoy (o atrasados), en el próximo envío
+  });
+  try { await pushApi({ action: 'schedule', device: meta.device, times }); } catch (err) {
+    if (err.status === 404) await saveMeta({ subscribed: false }); // el servidor olvidó el dispositivo: se vuelve a suscribir
+  }
+}
+let reminderTimer;
+function queueReminders() {
+  clearTimeout(reminderTimer);
+  reminderTimer = setTimeout(() => storeReminders(), 1200);
+}
+
+async function subscribePush() {
+  if (!canPush() || !(await checkServer())) { await saveMeta({ subscribed: false }); return false; }
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) {
+      const { publicKey } = await pushApi({ action: 'key' });
+      sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: unb64u(publicKey) });
+    }
+    const device = meta.device || randomHex(16);
+    await pushApi({ action: 'subscribe', device, sub: sub.toJSON() });
+    await saveMeta({ device, subscribed: true });
+    await storeReminders();
+    return true;
+  } catch (err) {
+    console.warn(err);
+    await saveMeta({ subscribed: false });
+    return false;
+  }
+}
+
+async function enableNotifications() {
+  if (!canNotify()) {
+    alert(isIOS && !isStandalone()
+      ? 'En el iPhone y el iPad los avisos solo funcionan con la app añadida a la pantalla de inicio. Añádela desde Safari (Compartir → Añadir a pantalla de inicio), ábrela desde su icono y actívalos ahí.'
+      : 'Este navegador no permite notificaciones.');
+    return false;
+  }
+  const perm = await Notification.requestPermission();
+  if (perm !== 'granted') {
+    alert('Sin permiso no se pueden mostrar avisos. Puedes darlo en los ajustes del móvil o del navegador (Notificaciones → DocCTRL).');
+    return false;
+  }
+  setNotify(true);
+  const pushed = await subscribePush();
+  (await navigator.serviceWorker.ready).showNotification('Avisos activados ✅', {
+    body: pushed ? 'Te avisaré antes de que venzan tus documentos y de los próximos cargos.' : 'El servidor de avisos no está disponible todavía: de momento solo verás los avisos dentro de la app.',
+    icon: 'icons/icon-192.png',
+    tag: 'docctrl-test',
+  });
+  return true;
+}
+
+async function disableNotifications() {
+  setNotify(false);
+  if (meta.device) pushApi({ action: 'unsubscribe', device: meta.device }).catch(() => {});
+  await saveMeta({ subscribed: false });
+}
+
+async function sendTest() {
+  if (meta.subscribed) {
+    try {
+      await pushApi({ action: 'test', device: meta.device });
+      toast('Aviso enviado: llega en unos segundos');
+      return;
+    } catch (_) {
+      toast('El servidor no ha podido enviarlo');
+    }
+  }
+  (await navigator.serviceWorker.ready).showNotification('DocCTRL', { body: 'Así se verán los avisos.', icon: 'icons/icon-192.png', tag: 'docctrl-test' });
+}
+
+function openNotifSheet() {
+  const sheet = openSheet('tall', 'Avisos');
   const draw = () => {
+    const perm = canNotify() ? Notification.permission : 'unsupported';
+    const active = notifyOn && perm === 'granted';
+    let status;
+    if (perm === 'unsupported') {
+      status = ['bad', 'Este navegador no puede mostrar avisos', isIOS && !isStandalone()
+        ? 'En iPhone/iPad: añade DocCTRL a la pantalla de inicio desde Safari y ábrela desde su icono.' : 'Prueba con Chrome o Safari actualizados.'];
+    } else if (perm === 'denied') {
+      status = ['bad', 'Avisos bloqueados', 'Permite las notificaciones de DocCTRL en los ajustes del móvil o del navegador.'];
+    } else if (!active) {
+      status = ['', 'Avisos desactivados', 'Actívalos y te avisaré antes de que venzan tus documentos y de los próximos cargos.'];
+    } else if (meta.subscribed) {
+      status = ['ok', 'Avisos activados', 'Llegan aunque la app esté cerrada, por la mañana del día que toca.'];
+    } else {
+      status = ['bad', 'Avisos sin servidor', serverOK === false
+        ? 'El servidor de avisos no está disponible (falta conectar la base de datos en Vercel).' : 'Comprobando el servidor de avisos…'];
+    }
+    const next = reminderList().filter((r) => r.d >= todayISO()).slice(0, 5);
     sheet.innerHTML = `
-      <h2 class="sheet-title">Aviso de vencimientos</h2>
-      <p class="muted small">Con cuánta antelación se marca una partida como «próxima a vencer». También se usa en los recordatorios que se añaden al calendario.</p>
-      <div class="seg wrap">
-        ${[15, 30, 60, 90, 180].map((d) => `<button type="button" class="${data.warnDays === d ? 'on' : ''}" data-d="${d}">${d} días</button>`).join('')}
+      <div class="sheet-head">
+        <h2 class="sheet-title">Avisos</h2>
+        <button type="button" class="icon-btn sm" data-close aria-label="Cerrar">${icon('close', 18)}</button>
       </div>
-      <div class="body-actions"><button class="done-btn" type="button" data-done>Listo</button></div>`;
-    sheet.querySelectorAll('[data-d]').forEach((b) => b.addEventListener('click', () => { data.warnDays = Number(b.dataset.d); persist(); render(); draw(); }));
-    sheet.querySelector('[data-done]').addEventListener('click', closeSheet);
+      <div class="notif-status ${status[0]}">${icon('bell', 22)}<span><b>${status[1]}</b><small>${status[2]}</small></span></div>
+      <div class="row-btns">
+        ${active
+          ? `<button type="button" class="ghost-btn" data-test>${icon('bell', 17)} Probar aviso</button><button type="button" class="ghost-btn danger" data-off>Desactivar</button>`
+          : perm === 'default' || perm === 'granted' ? `<button type="button" class="done-btn" data-on>${icon('bell', 18)} Activar avisos</button>` : ''}
+      </div>
+      <p class="muted small">Cada partida avisa con su antelación (se cambia al editarla), una semana antes y el mismo día. Por defecto: DNI, pasaporte, NIE y carnet de conducir, 90 días (para pedir cita); seguros, ITV y garantías, 30; suscripciones, 7; recibos, 3. Los recibos, seguros y suscripciones que se repiten saltan solos a la siguiente fecha.</p>
+      <p class="opt-label">Antelación para el resto</p>
+      <div class="seg wrap">
+        ${[15, 30, 60, 90].map((d) => `<button type="button" class="${data.warnDays === d ? 'on' : ''}" data-d="${d}">${d} días</button>`).join('')}
+      </div>
+      <p class="opt-label">Próximos avisos</p>
+      ${next.length ? `<ul class="next-list">${next.map((r) => `<li><span>${fmtDate(r.d)}</span><span><b>${esc(r.t)}</b><small>${esc(r.b)}</small></span></li>`).join('')}</ul>`
+        : '<p class="muted small">No hay avisos programados. Añade fechas de caducidad, de cargo o de renovación a tus partidas.</p>'}
+      <button type="button" class="ghost-btn wide-btn" data-ics>${icon('download', 17)} Añadir todo al calendario</button>
+      <p class="muted small">Crea un archivo de calendario con todos los vencimientos y sus alarmas: una alternativa a las notificaciones que funciona en cualquier dispositivo.</p>
+      <div class="body-actions"><button class="done-btn" type="button" data-close>Listo</button></div>`;
   };
   draw();
+  if (serverOK === null) checkServer().then(draw);
+  sheet.addEventListener('click', async (e) => {
+    if (e.target.closest('[data-close]')) return closeSheet();
+    if (e.target.closest('[data-on]')) { await enableNotifications(); draw(); }
+    if (e.target.closest('[data-off]')) { await disableNotifications(); draw(); }
+    if (e.target.closest('[data-test]')) sendTest();
+    if (e.target.closest('[data-ics]')) downloadICS(data.items);
+    const d = e.target.closest('[data-d]');
+    if (d) { data.warnDays = Number(d.dataset.d); data.settingsAt = Date.now(); persist(); render(); draw(); }
+  });
 }
 
 // ---------- Copia de seguridad (JSON con fotos) ----------
@@ -734,6 +1016,12 @@ $('import-input').addEventListener('change', async (e) => {
     await clearFiles();
     urlCache.clear();
     for (const [id, url] of Object.entries(obj.files || {})) await putFile(id, await (await fetch(url)).blob());
+    const now = Date.now();
+    next.items.forEach((it) => { it.at = now; });
+    next.people.forEach((pp) => { pp.at = now; });
+    next.settingsAt = now;
+    // Lo que había aquí y no está en la copia se marca como borrado (también en la nube)
+    for (const x of [...data.items, ...data.people]) if (!next.items.some((y) => y.id === x.id) && !next.people.some((y) => y.id === x.id)) next.deleted[x.id] = now;
     data = next;
     filter = 'all';
     persist();
@@ -744,11 +1032,273 @@ $('import-input').addEventListener('change', async (e) => {
   }
 });
 
+// ---------- Sincronización en la nube (cifrada) ----------
+// Igual que TaskCTRL y PayCTRL: usuario y contraseña derivan (PBKDF2) una clave para identificarse y
+// otra, que nunca sale del dispositivo, para cifrar (AES-GCM). Sal propia («docctrl-…»): mismo usuario
+// que en las otras apps, cuenta distinta. Se fusiona partida a partida (gana el cambio más reciente y
+// los borrados se respetan). Las fotos se cifran y suben una a una. Los avisos son de cada dispositivo.
+const SYNC_API = 'api/sync';
+const SYNC_EVERY_MS = 3 * 60 * 1000; // sincronización periódica mientras la app está abierta
+const PBKDF2_ITERATIONS = 310000;
+const utf8 = new TextEncoder();
+
+let sync = load(SYNC_KEY, null); // { username, user, auth, key, at }
+const saveSync = () => { if (sync) save(SYNC_KEY, sync); else { try { localStorage.removeItem(SYNC_KEY); } catch (_) {} } };
+let syncTimer = null;
+let syncBusy = false;
+let syncAgain = false;
+let syncError = '';
+
+const hex = (buf) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
+const sha256hex = async (text) => hex(await crypto.subtle.digest('SHA-256', utf8.encode(text)));
+const toB64 = (buf) => {
+  const bytes = new Uint8Array(buf);
+  let str = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) str += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(str);
+};
+const fromB64 = (str) => Uint8Array.from(atob(str), (ch) => ch.charCodeAt(0));
+
+async function deriveAccount(username, password) {
+  const u = username.trim().toLowerCase();
+  const base = await crypto.subtle.importKey('raw', utf8.encode(password), 'PBKDF2', false, ['deriveBits']);
+  const bits = (salt) => crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt: utf8.encode(salt), iterations: PBKDF2_ITERATIONS }, base, 256);
+  const [auth, key] = await Promise.all([bits(`docctrl-auth:${u}`), bits(`docctrl-enc:${u}`)]);
+  return { username: u, user: await sha256hex(`docctrl-user:${u}`), auth: hex(auth), key: toB64(key) };
+}
+
+const aesKey = (account) => crypto.subtle.importKey('raw', fromB64(account.key), 'AES-GCM', false, ['encrypt', 'decrypt']);
+async function encryptBytes(bytes, account = sync) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, await aesKey(account), bytes);
+  return `${toB64(iv)}.${toB64(ct)}`;
+}
+async function decryptBytes(blob, account = sync) {
+  const [iv, ct] = blob.split('.');
+  return crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64(iv) }, await aesKey(account), fromB64(ct));
+}
+const encryptData = (obj, account) => encryptBytes(utf8.encode(JSON.stringify(obj)), account);
+const decryptData = async (blob, account) => JSON.parse(new TextDecoder().decode(await decryptBytes(blob, account)));
+
+async function syncCall(action, extra = {}, account = sync) {
+  const body = JSON.stringify({ action, user: account.user, auth: account.auth, ...extra });
+  const res = await fetch(SYNC_API, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body,
+    // Al salir de la app, que la subida termine aunque se cierre (Safari lo limita a 64 KB)
+    keepalive: document.hidden && body.length < 60000,
+  });
+  const out = await res.json().catch(() => ({}));
+  if (!res.ok) throw Object.assign(new Error(out.error || `http ${res.status}`), { status: res.status });
+  return out;
+}
+
+const syncErrorText = (err) => ({
+  auth: 'Usuario o contraseña incorrectos.',
+  exists: 'Ese nombre de usuario ya existe. Elige otro o entra con tu cuenta.',
+  'too-many': 'Demasiados intentos. Espera 15 minutos.',
+  invite: 'La clave de registro no es correcta.',
+  'not-configured': 'Falta conectar la base de datos en Vercel (Storage → Upstash Redis).',
+  OperationError: 'No se han podido descifrar los datos de la nube.',
+}[err.message || err.name] || 'No se pudo conectar con la nube. Se reintentará.');
+
+// De cada partida o persona, la versión con el `at` más reciente; un borrado gana si es posterior
+function mergeById(a, b, deleted) {
+  const byId = new Map();
+  for (const x of [...(a || []), ...(b || [])]) {
+    const cur = byId.get(x.id);
+    if (!cur || (x.at || 0) > (cur.at || 0)) byId.set(x.id, x);
+  }
+  return [...byId.values()].filter((x) => !(deleted[x.id] >= (x.at || 0)));
+}
+function mergeData(a, b) {
+  const deleted = { ...(a.deleted || {}) };
+  for (const [id, at] of Object.entries(b.deleted || {})) if (!(deleted[id] >= at)) deleted[id] = at;
+  const newer = (b.settingsAt || 0) > (a.settingsAt || 0) ? b : a;
+  return { items: mergeById(a.items, b.items, deleted), people: mergeById(a.people, b.people, deleted), deleted, warnDays: newer.warnDays, settingsAt: newer.settingsAt || 0 };
+}
+const cloudPart = (x) => ({ items: x.items, people: x.people, deleted: x.deleted, warnDays: x.warnDays, settingsAt: x.settingsAt });
+const byIdSort = (arr) => (arr || []).slice().sort((p, q) => (p.id < q.id ? -1 : 1));
+const syncSig = (x) => JSON.stringify([byIdSort(x.items), byIdSort(x.people), Object.entries(x.deleted || {}).sort(), x.warnDays, x.settingsAt]);
+
+// Hay cambios locales: se suben en unos segundos (se agrupan)
+function queueSync() {
+  if (!sync) return;
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(() => syncNow(), 1500);
+}
+
+// Fotos: después de los datos (así una foto nunca está en la nube sin una partida que la use).
+// Se suben las que faltan, se bajan las que no hay aquí y se borran las que ya no usa ninguna partida.
+async function syncFiles() {
+  const used = new Set(data.items.flatMap((it) => it.photos));
+  const remote = new Set((await syncCall('file-list')).ids);
+  let got = false;
+  for (const id of used) {
+    const local = await getFile(id).catch(() => null);
+    if (remote.has(id) && !local) {
+      try {
+        const { blob } = await syncCall('file-get', { id });
+        await putFile(id, new Blob([await decryptBytes(blob)], { type: 'image/jpeg' }));
+        got = true;
+      } catch (err) { if (err.status !== 404) throw err; }
+    } else if (!remote.has(id) && local) {
+      await syncCall('file-put', { id, blob: await encryptBytes(await local.arrayBuffer()) });
+    }
+  }
+  for (const id of remote) if (!used.has(id)) await syncCall('file-del', { id });
+  // Fotos de este dispositivo que ya no usa ninguna partida (borradas en otro)
+  const localIds = await idb('readonly', (st) => st.getAllKeys()).catch(() => []);
+  for (const id of localIds) if (!used.has(id)) { await delFile(id).catch(() => {}); urlCache.delete(id); }
+  if (got) renderList();
+}
+
+async function syncNow({ interactive = false } = {}) {
+  if (!sync) return false;
+  if (syncBusy) { syncAgain = true; return false; }
+  syncBusy = true;
+  try {
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const remote = await syncCall('pull');
+      const cloud = remote.blob ? cleanData(await decryptData(remote.blob)) : null;
+      const merged = cloud ? mergeData(data, cloud) : cloudPart(data);
+      // Lo nuevo de la nube se aplica aquí
+      if (syncSig(merged) !== syncSig(data)) {
+        data = cleanData({ ...data, ...merged });
+        if (filter !== 'all' && filter !== '' && !data.people.some((p) => p.id === filter)) filter = 'all';
+        save(STORAGE_KEY, data);
+        queueReminders();
+        render();
+      }
+      // Y lo nuevo de aquí se sube
+      if (cloud && syncSig(cloudPart(data)) === syncSig(cloud)) break;
+      try {
+        await syncCall('push', { blob: await encryptData(cloudPart(data)), baseRev: remote.rev });
+        break;
+      } catch (err) {
+        if (err.status !== 409) throw err; // otro dispositivo subió justo antes: se vuelve a fusionar
+      }
+    }
+    await syncFiles();
+    sync.at = Date.now();
+    syncError = '';
+    saveSync();
+    return true;
+  } catch (err) {
+    console.warn(err);
+    syncError = syncErrorText(err);
+    if (interactive) toast(syncError);
+    return false;
+  } finally {
+    syncBusy = false;
+    if (syncAgain) { syncAgain = false; queueSync(); }
+  }
+}
+
+function syncStatusText() {
+  if (!sync) return 'Desactivada';
+  if (syncError) return syncError;
+  if (!sync.at) return 'Pendiente';
+  const mins = Math.round((Date.now() - sync.at) / 60000);
+  return `Al día · ${mins < 1 ? 'hace un momento' : mins < 60 ? `hace ${mins} min` : new Date(sync.at).toLocaleString('es-ES', { dateStyle: 'short', timeStyle: 'short' })}`;
+}
+
+function openSyncSheet() {
+  const sheet = openSheet('tall', 'Sincronización en la nube');
+  const head = `
+    <div class="sheet-head">
+      <h2 class="sheet-title">Sincronización en la nube</h2>
+      <button type="button" class="icon-btn sm" data-close aria-label="Cerrar">${icon('close', 18)}</button>
+    </div>`;
+
+  const renderConnected = () => {
+    sheet.innerHTML = `${head}
+      <div class="notif-status ${syncError ? 'bad' : 'ok'}">${icon('cloud', 22)}<span><b>Conectado como ${esc(sync.username)}</b><small class="s-status">${esc(syncStatusText())}</small></span></div>
+      <p class="muted small">Tus partidas y fotos se cifran en este dispositivo antes de subirse. Entra con el mismo usuario y contraseña en el móvil de tu pareja, en tu tablet o en el ordenador para tenerlo todo también allí. Si cambias algo en dos sitios a la vez, se juntan los cambios.</p>
+      <p class="muted small">Los avisos se activan en cada dispositivo por separado (⋯ → Avisos).</p>
+      <div class="row-btns">
+        <button type="button" class="done-btn" data-now>${icon('refresh', 17)} Sincronizar ahora</button>
+        <button type="button" class="ghost-btn danger" data-logout>${icon('logout', 17)} Desconectar</button>
+      </div>`;
+  };
+
+  const renderForm = (mode = 'login') => {
+    sheet.innerHTML = `${head}
+      <p class="muted small">Para tener tus documentos en varios dispositivos o compartirlos con tu familia. Se cifran aquí con tu contraseña antes de subirse: nadie más puede leerlos, ni siquiera el servidor. <b>Si olvidas la contraseña no se pueden recuperar.</b></p>
+      <div class="seg" role="group" aria-label="Cuenta">
+        <button type="button" data-mode="login" class="${mode === 'login' ? 'on' : ''}">Ya tengo cuenta</button>
+        <button type="button" data-mode="create" class="${mode === 'create' ? 'on' : ''}">Crear cuenta</button>
+      </div>
+      <label class="fld"><span>Usuario</span><input id="s-user" type="text" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" maxlength="40" /></label>
+      <label class="fld"><span>Contraseña</span><input id="s-pass" type="password" autocomplete="${mode === 'create' ? 'new-password' : 'current-password'}" maxlength="128" /></label>
+      ${mode === 'create' ? `
+      <label class="fld"><span>Repite la contraseña</span><input id="s-pass2" type="password" autocomplete="new-password" maxlength="128" /></label>
+      <label class="fld"><span>Clave de registro</span><input id="s-invite" type="text" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" maxlength="64" placeholder="La misma que en UnderCTRL" /></label>` : ''}
+      <p class="form-error" id="s-error" role="alert"></p>
+      <div class="body-actions"><button type="button" class="done-btn" id="s-go">${mode === 'create' ? 'Crear cuenta' : 'Entrar'}</button></div>`;
+    const q = (sel) => sheet.querySelector(sel);
+    q('#s-go').addEventListener('click', async () => {
+      const err = q('#s-error');
+      const username = q('#s-user').value.trim();
+      const password = q('#s-pass').value;
+      if (username.length < 3) return void (err.textContent = 'El usuario debe tener al menos 3 caracteres.');
+      if (password.length < 8) return void (err.textContent = 'La contraseña debe tener al menos 8 caracteres.');
+      if (mode === 'create' && password !== q('#s-pass2').value) return void (err.textContent = 'Las contraseñas no coinciden.');
+      if (mode === 'create' && !q('#s-invite').value.trim()) return void (err.textContent = 'Introduce la clave de registro.');
+      const btn = q('#s-go');
+      btn.disabled = true;
+      btn.textContent = 'Un momento…';
+      err.textContent = '';
+      try {
+        const account = await deriveAccount(username, password);
+        if (mode === 'create') await syncCall('register', { invite: q('#s-invite').value.trim() }, account);
+        else await syncCall('pull', {}, account); // comprueba usuario y contraseña
+        sync = { ...account, at: null };
+        saveSync();
+        const ok = await syncNow({ interactive: true });
+        if (ok) toast(mode === 'create' ? 'Cuenta creada. Tus documentos ya están en la nube' : 'Conectado. Documentos sincronizados');
+        renderConnected();
+      } catch (e) {
+        console.warn(e);
+        err.textContent = syncErrorText(e);
+        btn.disabled = false;
+        btn.textContent = mode === 'create' ? 'Crear cuenta' : 'Entrar';
+      }
+    });
+    q('#s-user').focus();
+  };
+
+  sheet.addEventListener('click', async (e) => {
+    if (e.target.closest('[data-close]')) return closeSheet();
+    const m = e.target.closest('[data-mode]');
+    if (m) return renderForm(m.dataset.mode);
+    if (e.target.closest('[data-now]')) {
+      sheet.querySelector('.s-status').textContent = 'Sincronizando…';
+      await syncNow({ interactive: true });
+      renderConnected();
+    }
+    if (e.target.closest('[data-logout]')) {
+      if (!confirm('¿Desconectar este dispositivo? Los documentos se quedan en él, pero dejarán de sincronizarse.')) return;
+      sync = null;
+      saveSync();
+      renderForm();
+      toast('Sincronización desactivada en este dispositivo');
+    }
+  });
+  if (sync) renderConnected();
+  else renderForm();
+}
+
+// Mientras la app está abierta, trae cada poco lo cambiado en otros dispositivos
+setInterval(() => { if (!document.hidden) syncNow(); }, SYNC_EVERY_MS);
+
 // ---------- Menú ⋯ ----------
 
 const MENU = [
   { label: 'Personas', icon: 'people', run: () => openPeopleSheet() },
-  { label: 'Aviso de vencimientos', icon: 'bell', run: () => openWarnSheet() },
+  { label: 'Avisos', icon: 'bell', run: () => openNotifSheet() },
+  { label: 'Sincronización en la nube', icon: 'cloud', run: () => openSyncSheet() },
   { label: 'Opciones de visualización', icon: 'palette', run: () => openDisplaySheet() },
   { label: 'Exportar copia', icon: 'download', run: () => exportBackup() },
   { label: 'Importar copia', icon: 'upload', run: () => $('import-input').click() },
@@ -870,17 +1420,11 @@ $('enter-btn').addEventListener('click', () => {
   setTimeout(() => {
     $('splash').remove();
     body.classList.remove('booting', 'entering');
-    maybeShowInstallHint();
+    if (pendingOpen) { openDetail(pendingOpen); pendingOpen = null; } else maybeShowInstallHint();
   }, 820);
 });
 
 // ---------- Aviso: añadir a la pantalla de inicio (solo móvil y tablet) ----------
-
-const ua = navigator.userAgent;
-// El iPad con iPadOS se identifica como Mac, pero tiene pantalla táctil
-const isIOS = /iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
-const isAndroid = /Android/.test(ua);
-const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
 
 const HINT_ICONS = {
   share: '<path d="M12 3.5v11M8 7.5l4-4 4 4"/><path d="M7 10.5H6a1.5 1.5 0 0 0-1.5 1.5v7A1.5 1.5 0 0 0 6 20.5h12a1.5 1.5 0 0 0 1.5-1.5v-7a1.5 1.5 0 0 0-1.5-1.5h-1"/>',
@@ -937,9 +1481,36 @@ document.addEventListener('dblclick', (e) => e.preventDefault(), { passive: fals
 // Pide al navegador que no borre los datos guardados (fotos incluidas) si falta espacio
 navigator.storage?.persist?.().catch(() => {});
 
+// Al tocar una notificación se abre la ficha de esa partida (?open=id, o mensaje del service worker)
+let pendingOpen = new URLSearchParams(location.search).get('open');
+if (pendingOpen) history.replaceState(null, '', location.pathname);
+const appEntered = () => !$('splash');
+function openFromNotification(id) {
+  if (!id) return;
+  if (appEntered()) openDetail(id);
+  else pendingOpen = id;
+}
+
 applyDisplay();
 render();
 
+// La fecha cambia a medianoche y con la app en segundo plano: se repinta al volver
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible') return;
+  render();
+  syncNow();
+  storeReminders();
+});
+
 if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.addEventListener('message', (e) => { if (e.data?.type === 'open') openFromNotification(e.data.id); });
   window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
 }
+
+(async () => {
+  try { meta = (await kvGet('meta')) || {}; } catch (_) { meta = {}; }
+  syncNow();
+  // Si el permiso sigue concedido, renueva la suscripción y los días de aviso
+  if (notifyOn && canPush() && Notification.permission === 'granted' && !meta.subscribed) subscribePush();
+  else storeReminders();
+})();

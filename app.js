@@ -1,7 +1,7 @@
 'use strict';
 
 // Versión de la app (se ve en la pantalla de inicio). Arreglos y ajustes: 0.x.y; novedades: 0.x.0.
-const APP_VERSION = '0.2.4';
+const APP_VERSION = '0.2.5';
 const STORAGE_KEY = 'docctrl:v1';
 const DISPLAY_KEY = 'docctrl:display';
 const INSTALL_HINT_KEY = 'docctrl:installHint';
@@ -1477,6 +1477,17 @@ function maybeShowInstallHint() {
 try { screen.orientation?.lock?.('portrait').catch(() => {}); } catch (_) { /* no compatible */ }
 document.addEventListener('gesturestart', (e) => e.preventDefault());
 document.addEventListener('dblclick', (e) => e.preventDefault(), { passive: false });
+
+// ---------- Difuminado del contenido sobre el botón Añadir (como en Up to 40% y UnderCTRL) ----------
+function updateFade() {
+  const barTop = $('add-btn').getBoundingClientRect().top - 10;
+  for (const el of document.querySelectorAll('main > *')) {
+    el.style.setProperty('--fade-b', `${Math.round(barTop - el.getBoundingClientRect().top)}px`);
+  }
+}
+window.addEventListener('scroll', updateFade, { passive: true });
+window.addEventListener('resize', updateFade);
+new ResizeObserver(updateFade).observe(document.querySelector('main'));
 
 // Pide al navegador que no borre los datos guardados (fotos incluidas) si falta espacio
 navigator.storage?.persist?.().catch(() => {});

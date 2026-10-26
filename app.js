@@ -1,7 +1,7 @@
 'use strict';
 
 // Versión de la app (se ve en la pantalla de inicio). Arreglos y ajustes: 0.x.y; novedades: 0.x.0.
-const APP_VERSION = '0.2.5';
+const APP_VERSION = '0.3.0';
 const STORAGE_KEY = 'docctrl:v1';
 const DISPLAY_KEY = 'docctrl:display';
 const INSTALL_HINT_KEY = 'docctrl:installHint';
@@ -22,6 +22,7 @@ const ICONS = {
   shield: '<path d="M12 3.5l7 2.5v5.5c0 4.4-3 7.7-7 9-4-1.3-7-4.6-7-9V6z"/><path d="M9 12l2.2 2.2L15.5 10"/>',
   bolt: '<path d="M13 3L5.5 13.5H12L11 21l7.5-10.5H12z"/>',
   flame: '<path d="M12 21c-3.6 0-6-2.4-6-5.6 0-3.6 3-5.4 3.6-9.4 2.4 1.6 3.6 3.6 3.6 5.6.9-.6 1.5-1.6 1.7-2.8 1.9 1.6 3.1 4 3.1 6.6 0 3.2-2.4 5.6-6 5.6z"/>',
+  lock: '<rect x="5" y="10.5" width="14" height="10" rx="2"/><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5"/>',
   key: '<circle cx="8" cy="15" r="4"/><path d="M11 12l8.5-8.5M16 7l2.5 2.5M14 9l2 2"/>',
   heart: '<path d="M3.5 12h4l2-4 3 8 2-4h6"/>',
   card: '<rect x="3" y="6" width="18" height="12" rx="2.5"/><path d="M3 10h18"/><path d="M15.5 14.5h2"/>',
@@ -68,8 +69,8 @@ function logoSVG(size) {
       </defs>
       <circle cx="60" cy="60" r="52" stroke="url(#${id})" stroke-width="1.2" opacity=".55"/>
       <circle cx="60" cy="60" r="42" stroke="url(#${id})" stroke-width=".8" stroke-dasharray="2 5" opacity=".6"/>
-      <path d="M60 8 A52 52 0 1 1 14.97 86" stroke="url(#${id})" stroke-width="3"/>
-      <circle cx="14.97" cy="86" r="3" fill="#fbbf24" stroke="none"/>
+      <path class="logo-arc" pathLength="1" d="M60 8 A52 52 0 1 1 14.97 86" stroke="url(#${id})" stroke-width="3"/>
+      <circle class="logo-dot" cx="14.97" cy="86" r="3" fill="#fbbf24" stroke="none"/>
       <rect x="33" y="43" width="54" height="36" rx="5" stroke="url(#${id})" stroke-width="1.8"/>
       <circle cx="47" cy="57" r="5" stroke="url(#${id})" stroke-width="1.6"/>
       <path d="M39 71c1.5-4 4.5-6 8-6s6.5 2 8 6" stroke="url(#${id})" stroke-width="1.6"/>
@@ -1300,14 +1301,16 @@ const MENU = [
   { label: 'Avisos', icon: 'bell', run: () => openNotifSheet() },
   { label: 'Sincronización en la nube', icon: 'cloud', run: () => openSyncSheet() },
   { label: 'Opciones de visualización', icon: 'palette', run: () => openDisplaySheet() },
+  { label: 'Nivel de seguridad', icon: 'shield', run: () => openSecuritySheet() },
   { label: 'Exportar copia', icon: 'download', run: () => exportBackup() },
   { label: 'Importar copia', icon: 'upload', run: () => $('import-input').click() },
+  { label: 'Bloquear', icon: 'lock', run: () => lockApp(), show: () => securityLevel() !== 'none' },
 ];
 
 function openMenu() {
   const menu = $('menu');
-  menu.innerHTML = MENU.map((m, i) =>
-    `<button class="menu-item" role="menuitem" data-i="${i}">${icon(m.icon, 20)}<span>${m.label}</span></button>`).join('');
+  menu.innerHTML = MENU.map((m, i) => (m.show && !m.show() ? '' :
+    `<button class="menu-item" role="menuitem" data-i="${i}">${icon(m.icon, 20)}<span>${m.label}</span></button>`)).join('');
   menu.querySelectorAll('.menu-item').forEach((b) => b.addEventListener('click', () => {
     closeMenu();
     MENU[b.dataset.i].run();
@@ -1411,17 +1414,275 @@ document.querySelector('main').addEventListener('click', (e) => {
   if (e.target.closest('[data-add]')) openTypePicker();
 });
 
-// ---------- Pantalla de inicio ----------
+// ---------- Seguridad (opcional) ----------
+// La misma que UnderCTRL y PayCTRL, pero desactivada por defecto: en el menú ⋯ → Nivel de seguridad
+// se elige Face ID / huella (passkey con WebAuthn) o un código numérico. Es de cada dispositivo.
+// Del código solo se guarda un hash PBKDF2 con sal. Una web no sabe si el móvil se ha bloqueado:
+// al volver a la app pasado RELOCK_AFTER_MS se pide otra vez.
+const SECURITY_KEY = 'docctrl:security'; // 'none' (por defecto) | 'bio' | 'pin'
+const PIN_KEY = 'docctrl:pin';
+const CRED_KEY = 'docctrl:cred';
+const SESSION_KEY = 'docctrl:session';
+const RELOCK_AFTER_MS = 2 * 60 * 1000;
+const isIPhone = /iPhone|iPod/.test(ua);
+const isWindows = /Windows/.test(ua);
+const BIO = isIPhone ? 'Face ID' : isAndroid ? 'la huella' : isWindows ? 'Windows Hello' : 'Touch ID';
+const BIO_NAME = BIO === 'la huella' ? 'Huella dactilar' : BIO;
+let bioAvailable = null; // se averigua al arrancar
+const securityLevel = () => {
+  const v = load(SECURITY_KEY, 'none');
+  return v === 'bio' || v === 'pin' ? v : 'none';
+};
+// Sin biometría en el dispositivo, «Face ID» pasa a código
+const effectiveLevel = () => (securityLevel() === 'bio' && bioAvailable === false ? 'pin' : securityLevel());
+const randomBytes = (n) => crypto.getRandomValues(new Uint8Array(n));
 
-$('enter-btn').addEventListener('click', () => {
+const session = {
+  mark: () => save(SESSION_KEY, { at: Date.now() }),
+  clear: () => { try { localStorage.removeItem(SESSION_KEY); } catch (_) {} },
+  get: () => {
+    const v = load(SESSION_KEY, null);
+    return v && Date.now() - v.at < RELOCK_AFTER_MS ? v : null;
+  },
+};
+let unlocked = securityLevel() === 'none';
+
+async function biometricsAvailable() {
+  return !!(window.PublicKeyCredential && await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable());
+}
+async function registerBio() {
+  const cred = await navigator.credentials.create({
+    publicKey: {
+      challenge: randomBytes(32),
+      rp: { name: 'DocCTRL' },
+      user: { id: randomBytes(16), name: 'docctrl', displayName: 'DocCTRL' },
+      pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
+      authenticatorSelection: { authenticatorAttachment: 'platform', userVerification: 'required', residentKey: 'preferred' },
+      timeout: 60000,
+    },
+  });
+  save(CRED_KEY, toB64(cred.rawId));
+}
+async function verifyBio() {
+  await navigator.credentials.get({
+    publicKey: {
+      challenge: randomBytes(32),
+      allowCredentials: [{ type: 'public-key', id: fromB64(load(CRED_KEY, '')) }],
+      userVerification: 'required',
+      timeout: 60000,
+    },
+  });
+}
+async function bioAuth() {
+  try {
+    if (!load(CRED_KEY, null)) await registerBio();
+    else await verifyBio();
+    return true;
+  } catch (err) {
+    toast(err.name === 'NotAllowedError' ? `Verificación cancelada. Vuelve a intentarlo con ${BIO}.` : `No se pudo verificar con ${BIO}.`);
+    return false;
+  }
+}
+
+async function pinHash(pin, salt) {
+  const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(pin), 'PBKDF2', false, ['deriveBits']);
+  const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt, iterations: 200000 }, base, 256);
+  return toB64(bits);
+}
+
+// Pide (o crea) el código. Va por encima de la pantalla de inicio.
+function pinSheet(create, intro = '') {
+  return new Promise((resolve) => {
+    const back = document.createElement('div');
+    back.className = 'sheet-backdrop over-splash';
+    back.innerHTML = `
+      <div class="sheet" role="dialog" aria-modal="true" aria-label="Código de acceso">
+        <h2 class="sheet-title">${create ? 'Crea un código de acceso' : 'Código de acceso'}</h2>
+        <p class="muted small">${intro || (create
+          ? 'Elige un código numérico de 4 a 12 cifras para proteger la app en este dispositivo.'
+          : 'Introduce tu código para ver tus documentos.')}</p>
+        <label class="fld"><span>Código</span><input class="p1" type="password" inputmode="numeric" autocomplete="${create ? 'new-password' : 'current-password'}" maxlength="12"></label>
+        ${create ? '<label class="fld"><span>Repite el código</span><input class="p2" type="password" inputmode="numeric" autocomplete="new-password" maxlength="12"></label>' : ''}
+        <p class="form-error p-err" role="alert"></p>
+        <div class="editor-actions">
+          <button class="ghost-btn p-cancel" type="button">Cancelar</button>
+          <button class="done-btn p-ok" type="button">${create ? 'Guardar' : 'Entrar'}</button>
+        </div>
+      </div>`;
+    const q = (sel) => back.querySelector(sel);
+    const done = (v) => { back.remove(); resolve(v); };
+    q('.p-cancel').addEventListener('click', () => done(false));
+    const submit = async () => {
+      const pin = q('.p1').value;
+      if (create) {
+        if (!/^\d{4,12}$/.test(pin)) return void (q('.p-err').textContent = 'Usa solo números (de 4 a 12 cifras).');
+        if (pin !== q('.p2').value) return void (q('.p-err').textContent = 'Los códigos no coinciden.');
+        const salt = randomBytes(16);
+        save(PIN_KEY, { salt: toB64(salt), hash: await pinHash(pin, salt) });
+        return done(true);
+      }
+      const stored = load(PIN_KEY, null);
+      if (stored && (await pinHash(pin, fromB64(stored.salt))) === stored.hash) return done(true);
+      q('.p-err').textContent = 'Código incorrecto.';
+      q('.p1').select();
+    };
+    q('.p-ok').addEventListener('click', submit);
+    back.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
+    document.body.append(back);
+    q('.p1').focus();
+  });
+}
+
+async function authenticate(level = effectiveLevel()) {
+  if (level === 'none') return true;
+  if (level === 'pin' || !(await biometricsAvailable())) return pinSheet(!load(PIN_KEY, null));
+  return bioAuth();
+}
+
+async function unlock() {
+  // Dentro del margen de sesión (p. ej. iOS cerró la app hace un momento) no se repite
+  if (!session.get() && !(await authenticate())) return false;
+  unlocked = true;
+  session.mark();
+  return true;
+}
+
+// Vuelve a la pantalla de inicio sin dejar datos a la vista
+function lockApp() {
+  closeSheet();
+  closeMenu();
+  document.querySelector('.viewer')?.remove();
+  unlocked = false;
+  session.clear();
+  if (!$('splash')) document.body.prepend(splashTemplate.cloneNode(true));
+  document.body.classList.add('booting');
+  window.scrollTo(0, 0);
+  showUnlockButton();
+}
+
+// Glifos de la pantalla de inicio y de la hoja Nivel de seguridad (los mismos que UnderCTRL)
+const FACE_GLYPH = '<path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2"/><path d="M9 9.5v1M15 9.5v1M12 9.5v3.5h-1M9.5 15.5c1.5 1.2 3.5 1.2 5 0"/>';
+const FINGER_GLYPH = '<path d="M7.5 17.5c.8-1.6 1.2-3.4 1.2-5.3a3.3 3.3 0 0 1 6.6 0c0 .9 0 1.8-.2 2.6"/><path d="M5.2 14.8c.3-.9.5-1.8.5-2.8a6.3 6.3 0 0 1 12.2-2.2"/><path d="M12 12.2c0 2.9-.8 5.6-2.2 7.8"/><path d="M14.8 17.2c-.3 1-.7 1.9-1.2 2.8"/><path d="M18.3 13.5c0 1.5-.2 3-.6 4.4"/>';
+const KEYPAD_GLYPH = [6, 12, 18].flatMap((y) => [6, 12, 18].map((x) => `<circle cx="${x}" cy="${y - 1.5}" r="1.6"/>`)).join('') + '<circle cx="12" cy="22" r="1.6"/>';
+const ENTER_GLYPH = '<path d="M10 17l5-5-5-5"/><path d="M15 12H3"/><path d="M14 3h5a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-5"/>';
+const glyphSVG = (g, size, sw) => `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${g}</svg>`;
+
+// ---------- Pantalla de inicio ----------
+// Sin nivel de seguridad: el logo aparece (el arco se dibuja), se ve un instante y se pasa sola a la
+// app con la transición de cristal, como en ChatCTRL. Con seguridad: se entra con su botón.
+const SPLASH_HOLD_MS = 1700;
+const SPLASH_OUT_MS = 800;
+const splashTemplate = $('splash').cloneNode(true); // para volver a bloquear
+function enterApp() {
   const body = document.body;
-  if (body.classList.contains('entering')) return;
+  if (!$('splash') || !unlocked || body.classList.contains('entering')) return;
   body.classList.add('entering');
   setTimeout(() => {
     $('splash').remove();
     body.classList.remove('booting', 'entering');
     if (pendingOpen) { openDetail(pendingOpen); pendingOpen = null; } else maybeShowInstallHint();
-  }, 820);
+  }, SPLASH_OUT_MS);
+}
+
+function showUnlockButton() {
+  const main = $('splash')?.querySelector('.sp-main');
+  if (!main || main.querySelector('.sp-unlock')) return;
+  const level = effectiveLevel();
+  const glyph = level === 'pin' ? KEYPAD_GLYPH : isIPhone ? FACE_GLYPH : FINGER_GLYPH;
+  const label = level === 'pin' ? 'Entrar con código' : `Entrar con ${BIO}`;
+  const box = document.createElement('div');
+  box.className = 'sp-unlock';
+  box.innerHTML = `
+    <button class="sp-enter" type="button" aria-label="${esc(label)}">${glyphSVG(glyph, 46, 1.1)}</button>
+    <p class="sp-label">${esc(label)}</p>`;
+  main.append(box);
+  const btn = box.querySelector('button');
+  btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    try {
+      if (await unlock()) enterApp();
+    } finally {
+      btn.disabled = false;
+    }
+  });
+}
+
+function startSplash() {
+  if (securityLevel() !== 'none' && session.get()) { unlocked = true; session.mark(); } // volvió enseguida
+  if (!unlocked) return showUnlockButton();
+  setTimeout(enterApp, SPLASH_HOLD_MS);
+  // Abierta desde un aviso: se entra antes
+  setTimeout(() => { if (pendingOpen) enterApp(); }, 380);
+}
+
+biometricsAvailable().then((v) => { bioAvailable = v; }).catch(() => { bioAvailable = false; });
+
+// ---------- Nivel de seguridad (menú ⋯) ----------
+// Cambiarlo pide primero el método actual; después se activa el nuevo.
+const SECURITY_OPTS = [
+  { key: 'none', title: () => 'Sin protección', sub: () => 'Se entra directamente. Quien use este dispositivo podrá ver tus documentos.' },
+  { key: 'bio', title: () => BIO_NAME, sub: () => (bioAvailable === false ? 'No disponible en este dispositivo' : `Se pide ${BIO} al entrar en la app.`) },
+  { key: 'pin', title: () => 'Código numérico', sub: () => 'Un código de 4 a 12 cifras.' },
+];
+const SECURITY_GLYPH = { bio: () => (isIPhone ? FACE_GLYPH : FINGER_GLYPH), pin: () => KEYPAD_GLYPH, none: () => ENTER_GLYPH };
+
+function openSecuritySheet() {
+  const sheet = openSheet('', 'Nivel de seguridad');
+  const draw = () => {
+    const cur = effectiveLevel();
+    sheet.innerHTML = `
+      <div class="sheet-head"><h2 class="sheet-title">Nivel de seguridad</h2>
+        <button class="icon-btn sm" type="button" data-close aria-label="Cerrar">${icon('close', 18)}</button></div>
+      <p class="muted small">Cómo se entra en la app en este dispositivo. Para cambiarlo se pide primero el método actual. Al volver a la app pasados 2 minutos se pide otra vez.</p>
+      <div class="sec-list" role="radiogroup">${SECURITY_OPTS.map((o) => {
+        const disabled = o.key === 'bio' && bioAvailable === false;
+        return `
+        <button class="sec-opt ${cur === o.key ? 'on' : ''}" type="button" role="radio" aria-checked="${cur === o.key}" data-level="${o.key}" ${disabled ? 'disabled' : ''}>
+          <span class="sec-icon">${glyphSVG(SECURITY_GLYPH[o.key](), 22, 1.3)}</span>
+          <span class="sec-text"><span class="sec-title">${esc(o.title())}</span><span class="muted small">${esc(o.sub())}</span></span>
+          <span class="sec-check">${cur === o.key ? icon('check', 18) : ''}</span>
+        </button>`;
+      }).join('')}</div>
+      ${cur === 'pin' ? '<button class="sec-change" type="button">Cambiar el código</button>' : ''}
+      <div class="body-actions"><button class="done-btn" type="button" data-done>Listo</button></div>`;
+    sheet.querySelector('[data-close]').addEventListener('click', closeSheet);
+    sheet.querySelector('[data-done]').addEventListener('click', closeSheet);
+    sheet.querySelectorAll('.sec-opt').forEach((b) => b.addEventListener('click', async () => {
+      if (b.dataset.level === effectiveLevel()) return;
+      if (await changeSecurity(b.dataset.level)) draw();
+    }));
+    sheet.querySelector('.sec-change')?.addEventListener('click', async () => {
+      if (await changeSecurity('pin', true)) draw();
+    });
+  };
+  draw();
+}
+
+async function changeSecurity(next, changePin = false) {
+  const cur = effectiveLevel();
+  // 1) Verificar con el nivel actual
+  if (cur === 'bio' && !(await bioAuth())) return false;
+  if (cur === 'pin' && load(PIN_KEY, null) &&
+      !(await pinSheet(false, changePin ? 'Introduce el código actual.' : 'Introduce tu código actual para cambiar el nivel de seguridad.'))) return false;
+  // 2) Activar el nuevo
+  if (next === 'pin' && !(await pinSheet(true, changePin ? 'Elige el nuevo código (de 4 a 12 cifras).' : 'Elige un código numérico de 4 a 12 cifras para entrar en la app.'))) return false;
+  if (next === 'bio' && !(await bioAuth())) return false;
+  if (next !== 'pin') { try { localStorage.removeItem(PIN_KEY); } catch (_) {} }
+  save(SECURITY_KEY, next);
+  unlocked = true;
+  session.mark();
+  toast(changePin ? 'Código actualizado'
+    : next === 'none' ? 'Seguridad desactivada: se entra directamente'
+    : `Se pedirá ${next === 'pin' ? 'el código' : BIO} al entrar`);
+  return true;
+}
+
+// Al salir se apunta la hora; al volver pasado el margen, se bloquea
+document.addEventListener('visibilitychange', () => {
+  if (securityLevel() === 'none' || !unlocked) return;
+  if (document.hidden) session.mark();
+  else if (session.get()) session.mark();
+  else lockApp();
 });
 
 // ---------- Aviso: añadir a la pantalla de inicio (solo móvil y tablet) ----------
@@ -1504,6 +1765,7 @@ function openFromNotification(id) {
 
 applyDisplay();
 render();
+startSplash();
 
 // La fecha cambia a medianoche y con la app en segundo plano: se repinta al volver
 document.addEventListener('visibilitychange', () => {

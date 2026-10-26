@@ -2,13 +2,13 @@
 
 *by OmT Finance*
 
-Versión **0.3.0** (se muestra en la pantalla de inicio). Las correcciones y ajustes suben el último número (0.1.1); las novedades, el del medio (0.2.0).
+Versión **0.3.1** (se muestra en la pantalla de inicio). Las correcciones y ajustes suben el último número (0.1.1); las novedades, el del medio (0.2.0).
 
 App web instalable (PWA) para tener a mano los documentos y datos del día a día de una persona, una pareja o una familia (DNI, carnet de conducir, seguros, ITV, garantías…), con sus fotos y avisos de vencimiento.
 
 ## Funcionamiento
 
-- Pantalla de inicio sin botón: el logo aparece (el arco se dibuja), se ve un instante y se pasa sola a la app con una transición de cristal difuminado (≈2,5 s; más corta si se abre desde un aviso). Siempre en vertical.
+- Pantalla de inicio sin botón: el logo aparece (el arco se dibuja), se ve un instante y se pasa sola a la app con una transición de cristal difuminado (≈2,9 s; más corta si se abre desde un aviso). Siempre en vertical.
 - **Nivel de seguridad** (menú ⋯, opcional y de cada dispositivo), como en UnderCTRL y PayCTRL: *Sin protección* (por defecto: se entra sola), *Face ID / huella* (passkey con WebAuthn) o *Código numérico* de 4 a 12 cifras (se guarda solo un hash PBKDF2 con sal). Con seguridad, la pantalla de inicio enseña el botón «Entrar con …»; al volver a la app pasados 2 minutos se bloquea otra vez, y el menú ⋯ añade «Bloquear». Para cambiar de nivel se pide antes el método actual. Claves `docctrl:security`, `docctrl:pin`, `docctrl:cred`, `docctrl:session`.
 - **Resumen de vencimientos**: partidas vencidas, las que vencen dentro del aviso (60 días por defecto) y la lista de las más urgentes.
 - **Personas**: filtro por persona (más «Común» para lo que es de todos). Se gestionan en el menú ⋯ → Personas.

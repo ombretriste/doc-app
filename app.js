@@ -1,7 +1,7 @@
 'use strict';
 
 // Versión de la app (se ve en la pantalla de inicio). Arreglos y ajustes: 0.x.y; novedades: 0.x.0.
-const APP_VERSION = '0.3.0';
+const APP_VERSION = '0.3.1';
 const STORAGE_KEY = 'docctrl:v1';
 const DISPLAY_KEY = 'docctrl:display';
 const INSTALL_HINT_KEY = 'docctrl:installHint';
@@ -1571,7 +1571,7 @@ const glyphSVG = (g, size, sw) => `<svg viewBox="0 0 24 24" width="${size}" heig
 // Sin nivel de seguridad: el logo aparece (el arco se dibuja), se ve un instante y se pasa sola a la
 // app con la transición de cristal, como en ChatCTRL. Con seguridad: se entra con su botón.
 const SPLASH_HOLD_MS = 1700;
-const SPLASH_OUT_MS = 800;
+const SPLASH_OUT_MS = 1200;
 const splashTemplate = $('splash').cloneNode(true); // para volver a bloquear
 function enterApp() {
   const body = document.body;

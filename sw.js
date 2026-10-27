@@ -1,5 +1,5 @@
 // Cambia la versión al modificar archivos para que los móviles descarguen la nueva versión
-const CACHE = 'docctrl-v9';
+const CACHE = 'docctrl-v10';
 const ASSETS = [
   './',
   'index.html',

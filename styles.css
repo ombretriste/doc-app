@@ -767,3 +767,11 @@ main > * {
 .sec-title { font-size: 16px; }
 .sec-check { width: 18px; display: grid; place-items: center; color: var(--accent); }
 .sec-change { align-self: flex-start; padding: 4px 0; border: 0; background: transparent; color: var(--accent); font-size: 14px; }
+
+/* ---------- iPhone (iOS 26+): sin la «nube» del borde de arriba ----------
+   En la app instalada, iOS difumina la franja de la barra de estado salvo que arriba del todo haya
+   una barra fija (o sticky) con fondo opaco. La barra superior pasa a fondo sólido solo a pantalla
+   completa; en el navegador sigue como estaba. */
+@media (display-mode: standalone) {
+  .topbar { background: var(--bg); -webkit-backdrop-filter: none; backdrop-filter: none; }
+}

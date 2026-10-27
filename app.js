@@ -1,7 +1,7 @@
 'use strict';
 
 // Versión de la app (se ve en la pantalla de inicio). Arreglos y ajustes: 0.x.y; novedades: 0.x.0.
-const APP_VERSION = '0.3.1';
+const APP_VERSION = '0.3.2';
 const STORAGE_KEY = 'docctrl:v1';
 const DISPLAY_KEY = 'docctrl:display';
 const INSTALL_HINT_KEY = 'docctrl:installHint';

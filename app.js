@@ -1,7 +1,7 @@
 'use strict';
 
 // Versión de la app (se ve en la pantalla de inicio). Arreglos y ajustes: 0.x.y; novedades: 0.x.0.
-const APP_VERSION = '0.4.2';
+const APP_VERSION = '0.5.0';
 // Uso de la app en Vercel Analytics: es una sola página, así que cada función se cuenta como una
 // página virtual. Solo se envía el nombre de la función, nunca datos de la app.
 const track = (path) => { try { window.va?.('pageview', { path }); } catch (_) { /* sin analítica */ } };
@@ -13,6 +13,7 @@ const NOTIFY_KEY = 'docctrl:notify';
 const SYNC_KEY = 'docctrl:sync';
 
 const ICONS = {
+  info: '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5.5"/><circle cx="12" cy="7.8" r=".9" fill="currentColor" stroke="none"/>',
   // Categorías
   id: '<rect x="3" y="5.5" width="18" height="13" rx="2.5"/><circle cx="8.5" cy="11" r="2"/><path d="M5.5 16c.6-1.6 1.7-2.4 3-2.4s2.4.8 3 2.4"/><path d="M14 10h4M14 13h4"/>',
   car: '<path d="M4 16.5V12l2-5h12l2 5v4.5"/><path d="M3.5 12h17"/><rect x="3.5" y="12" width="17" height="4.5" rx="1"/><circle cx="7.5" cy="14.2" r=".9" fill="currentColor"/><circle cx="16.5" cy="14.2" r=".9" fill="currentColor"/><path d="M6 16.5v2M18 16.5v2"/>',
@@ -1309,6 +1310,7 @@ const MENU = [
   { label: 'Exportar copia', icon: 'download', run: () => exportBackup() },
   { label: 'Importar copia', icon: 'upload', run: () => $('import-input').click() },
   { label: 'Bloquear', icon: 'lock', run: () => lockApp(), show: () => securityLevel() !== 'none' },
+  { label: 'Información', icon: 'info', run: () => openInfoSheet() },
 ];
 
 function openMenu() {
@@ -1339,6 +1341,24 @@ document.addEventListener('click', (e) => {
   if (!$('menu').hidden && !e.target.closest('#menu')) closeMenu();
 });
 window.addEventListener('resize', closeMenu);
+
+function openInfoSheet() {
+  closeSheet();
+  const back = document.createElement('div');
+  back.className = 'sheet-backdrop center';
+  back.innerHTML = `
+    <div class="sheet info-sheet" role="dialog" aria-modal="true" aria-label="Información">
+      <span class="install-logo">${logoSVG(56)}</span>
+      <h2 class="sheet-title">DocCTRL</h2>
+      <p class="small muted">Versión ${APP_VERSION} · by OmT Finance</p>
+      <p class="small">Los documentos de toda la familia en un sitio: DNI, carnet de conducir, seguros, ITV, garantías y recibos, con sus fotos y un aviso antes de que caduquen.</p>
+      <p class="small muted">Tus documentos se guardan en este dispositivo. Con la sincronización en la nube activada, se cifran en tu dispositivo antes de subirse.</p>
+      <div class="info-actions"><button type="button" class="done-btn" data-close>Cerrar</button></div>
+    </div>`;
+  document.body.append(back);
+  back.addEventListener('click', (e) => { if (e.target === back) closeSheet(); });
+  back.querySelector('[data-close]').addEventListener('click', closeSheet);
+}
 
 // ---------- Opciones de visualización (modo y fondo) ----------
 

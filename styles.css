@@ -778,3 +778,9 @@ main > * {
 .sec-title { font-size: 16px; }
 .sec-check { width: 18px; display: grid; place-items: center; color: var(--accent); }
 .sec-change { align-self: flex-start; padding: 4px 0; border: 0; background: transparent; color: var(--accent); font-size: 14px; }
+
+/* Hoja de Información (menú ⋯) */
+.info-sheet { border-radius: 22px; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; align-items: center; gap: 10px; max-width: 400px; text-align: center; }
+.info-sheet p { margin: 0; line-height: 1.45; }
+.info-sheet .sheet-title { margin: 0; }
+.info-actions { display: flex; justify-content: center; width: 100%; margin-top: 6px; }

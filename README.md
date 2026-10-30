@@ -2,7 +2,7 @@
 
 *by OmT Finance*
 
-Versión **0.3.3** (se muestra en la pantalla de inicio). Las correcciones y ajustes suben el último número (0.1.1); las novedades, el del medio (0.2.0).
+Versión **0.4.0** (se muestra en la pantalla de inicio). Las correcciones y ajustes suben el último número (0.1.1); las novedades, el del medio (0.2.0).
 
 App web instalable (PWA) para tener a mano los documentos y datos del día a día de una persona, una pareja o una familia (DNI, carnet de conducir, seguros, ITV, garantías…), con sus fotos y avisos de vencimiento.
 
@@ -47,6 +47,10 @@ Igual que TaskCTRL y PayCTRL (`api/sync.js`): usuario y contraseña derivan con 
 3. El cron diario se crea solo con `vercel.json`. (Opcional: un cron en cron-job.org a `/api/push?run` lo hace más puntual.)
 
 Los datos se guardan en el propio dispositivo: los campos en `localStorage` (`docctrl:v1`) y las fotos en IndexedDB (`docctrl`). La copia exportada es un `.json` con todo, fotos incluidas. Con la sincronización activada, se suben a la nube cifrados.
+
+## Analítica
+
+Vercel Web Analytics (se activa en la pestaña Analytics del proyecto de Vercel, sin cookies). La app es una sola página, así que cada función se cuenta como una página virtual con `track()` en `app.js`. Solo se envía el nombre de la función, nunca datos de la app, y `beforeSend` (en `index.html`) quita de la dirección lo que va tras `?` o `#`.
 
 ## Desarrollo
 

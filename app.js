@@ -1,7 +1,7 @@
 'use strict';
 
 // Versión de la app (se ve en la pantalla de inicio). Arreglos y ajustes: 0.x.y; novedades: 0.x.0.
-const APP_VERSION = '0.5.0';
+const APP_VERSION = '0.6.0';
 // Uso de la app en Vercel Analytics: es una sola página, así que cada función se cuenta como una
 // página virtual. Solo se envía el nombre de la función, nunca datos de la app.
 const track = (path) => { try { window.va?.('pageview', { path }); } catch (_) { /* sin analítica */ } };
@@ -54,6 +54,7 @@ const ICONS = {
   download: '<path d="M12 4v11M7.5 10.5L12 15l4.5-4.5"/><path d="M4 17v1.5A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5V17"/>',
   upload: '<path d="M12 15V4M7.5 8.5L12 4l4.5 4.5"/><path d="M4 17v1.5A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5V17"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
+  share: '<path d="M12 3.5v11M8 7.5l4-4 4 4"/><path d="M7 10.5H6a1.5 1.5 0 0 0-1.5 1.5v7A1.5 1.5 0 0 0 6 20.5h12a1.5 1.5 0 0 0 1.5-1.5v-7a1.5 1.5 0 0 0-1.5-1.5h-1"/>',
   cloud: '<path d="M7 18.5a4.5 4.5 0 0 1-.6-8.96A6 6 0 0 1 18 9a4.75 4.75 0 0 1-.5 9.5z"/>',
   refresh: '<path d="M20 12a8 8 0 1 1-2.34-5.66L20 8.5"/><path d="M20 4v4.5h-4.5"/>',
   logout: '<path d="M14 4h4a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-4"/><path d="M10 16l-4-4 4-4M6 12h10"/>',
@@ -240,8 +241,15 @@ function hydratePhotos(root) {
   });
 }
 
+// Archivos que no son fotos (PDF, Word…): sus datos están en it.docs[id]; un id sin entrada es una foto
+const MAX_FILE_MB = 25;
+const isPdf = (doc) => doc.type === 'application/pdf' || /\.pdf$/i.test(doc.name);
+const fileExt = (doc) => (doc.name.match(/\.([a-z0-9]{1,5})$/i)?.[1] || 'archivo').toUpperCase();
+const docTile = (doc) => `<span class="doc-tile">${icon('doc', 24)}<b>${esc(fileExt(doc))}</b><small>${esc(doc.name)}</small></span>`;
+
 // Reduce la foto a 1800 px como máximo y la guarda en JPEG
 async function compressImage(file) {
+  if (!file.type.startsWith('image/')) throw new Error('no-image'); // Safari abre un PDF como imagen: se perderían las páginas
   const MAX = 1800;
   const src = await new Promise((resolve, reject) => {
     const img = new Image();
@@ -259,10 +267,20 @@ async function compressImage(file) {
 }
 
 // ---------- Datos ----------
-// people: [{id, name, at}] · items: [{id, type, person ('' = común), label, f: {campo: valor}, notes, photos: [id],
+// people: [{id, name, at}] · items: [{id, type, person ('' = común), label, f: {campo: valor}, notes,
+// photos: [id de fotos y archivos], docs: {id: {name, type, size}} (solo los que no son fotos),
 // lead (días | 'off' | sin poner = el del tipo), upd (AAAA-MM-DD), at (ms del último cambio)}]
 // deleted: {id: ms} de partidas y personas borradas (para que la sincronización respete los borrados).
 // warnDays: antelación general, para los tipos que no tienen una propia · settingsAt: cuándo se cambió.
+
+function cleanDocs(it) {
+  const out = {};
+  for (const id of Array.isArray(it.photos) ? it.photos : []) {
+    const doc = it.docs?.[id];
+    if (doc?.name) out[id] = { name: String(doc.name), type: String(doc.type || ''), size: Number(doc.size) || 0 };
+  }
+  return Object.keys(out).length ? { docs: out } : {};
+}
 
 function cleanData(d) {
   const people = Array.isArray(d?.people) ? d.people.filter((p) => p?.id && p.name).map((p) => ({ id: String(p.id), name: String(p.name), at: Number(p.at) || 0 })) : [];
@@ -274,6 +292,7 @@ function cleanData(d) {
     f: Object.fromEntries(Object.entries(it.f || {}).filter(([, v]) => v !== '' && v != null).map(([k, v]) => [k, String(v)])),
     notes: String(it.notes || ''),
     photos: Array.isArray(it.photos) ? it.photos.map(String) : [],
+    ...cleanDocs(it),
     ...(it.lead === 'off' || (Number.isFinite(it.lead) && it.lead >= 0) ? { lead: it.lead } : {}),
     upd: it.upd || todayISO(),
     at: Number(it.at) || 0,
@@ -349,7 +368,7 @@ function visibleItems() {
   return data.items.filter((it) => {
     if (filter !== 'all' && it.person !== filter) return false;
     if (!q) return true;
-    const hay = [itemTitle(it), TYPES[it.type].label, personName(it.person), it.notes, ...Object.values(it.f)].map(normalize).join(' ');
+    const hay = [itemTitle(it), TYPES[it.type].label, personName(it.person), it.notes, ...Object.values(it.f), ...Object.values(it.docs || {}).map((x) => x.name)].map(normalize).join(' ');
     return q.split(/\s+/).every((w) => hay.includes(w));
   });
 }
@@ -397,6 +416,12 @@ function renderPeople() {
   }).join('');
 }
 
+// Miniatura de la lista: la primera foto o, si solo hay archivos, el tipo del primero
+function thumb(it) {
+  const photo = it.photos.find((id) => !it.docs?.[id]);
+  return photo ? `<img data-photo="${esc(photo)}" alt="">` : `<span class="thumb-doc">${esc(fileExt(it.docs[it.photos[0]]))}</span>`;
+}
+
 function itemCard(it) {
   const e = expiry(it);
   const type = TYPES[it.type];
@@ -409,7 +434,7 @@ function itemCard(it) {
         ${sub ? `<span class="item-sub">${esc(sub)}</span>` : ''}
         ${e ? `<span class="item-exp ${e.cls}">${esc(expiryText(e))}</span>` : ''}
       </span>
-      ${it.photos.length ? `<span class="item-thumb"><img data-photo="${esc(it.photos[0])}" alt="">${it.photos.length > 1 ? `<i>${it.photos.length}</i>` : ''}</span>` : ''}
+      ${it.photos.length ? `<span class="item-thumb">${thumb(it)}${it.photos.length > 1 ? `<i>${it.photos.length}</i>` : ''}</span>` : ''}
     </button>`;
 }
 
@@ -475,7 +500,7 @@ function openTypePicker() {
 }
 
 // Alta y edición de una partida
-let editorPhotos = null; // [{id, blob?}] mientras el editor está abierto
+let editorPhotos = null; // [{id, doc?, blob?, url?}] mientras el editor está abierto
 
 function openEditor(id, typeKey) {
   const it = id ? data.items.find((x) => x.id === id) : null;
@@ -483,7 +508,7 @@ function openEditor(id, typeKey) {
   const tkey = it ? it.type : typeKey;
   const defPerson = it ? it.person : filter !== 'all' ? filter : data.people[0]?.id || '';
   let person = defPerson;
-  editorPhotos = (it?.photos || []).map((p) => ({ id: p }));
+  editorPhotos = (it?.photos || []).map((p) => ({ id: p, doc: it.docs?.[p] }));
   const sheet = openSheet('editor-sheet tall', type.label);
 
   const field = (f) => {
@@ -518,7 +543,7 @@ function openEditor(id, typeKey) {
       </select></label>` : ''}
     </div>
     ${type.note ? `<p class="muted small type-note">${esc(type.note)}</p>` : ''}
-    <p class="opt-label">Fotos</p>
+    <p class="opt-label">Fotos y archivos</p>
     <div class="photo-strip" id="ed-photos"></div>
     <label class="fld wide"><span>Notas</span><textarea id="ed-notes" rows="3">${esc(it?.notes || '')}</textarea></label>
     <div class="editor-actions">
@@ -529,12 +554,9 @@ function openEditor(id, typeKey) {
   const drawPhotos = () => {
     const strip = sheet.querySelector('#ed-photos');
     strip.innerHTML = editorPhotos.map((p, i) => `
-      <span class="ph"><img ${p.blob ? '' : `data-photo="${esc(p.id)}"`} alt="">
-        <button type="button" class="ph-del" data-i="${i}" aria-label="Quitar foto">${icon('close', 14)}</button></span>`).join('')
+      <span class="ph">${p.doc ? docTile(p.doc) : `<img ${p.blob ? `src="${esc(p.url)}"` : `data-photo="${esc(p.id)}"`} alt="">`}
+        <button type="button" class="ph-del" data-i="${i}" aria-label="Quitar">${icon('close', 14)}</button></span>`).join('')
       + `<button type="button" class="ph-add" id="ed-add-photo">${icon('camera', 24)}<span>Añadir</span></button>`;
-    editorPhotos.forEach((p, i) => {
-      if (p.blob) strip.querySelectorAll('.ph img')[i].src = p.url;
-    });
     hydratePhotos(strip);
     strip.querySelectorAll('.ph-del').forEach((b) => b.addEventListener('click', () => {
       editorPhotos.splice(Number(b.dataset.i), 1);
@@ -568,7 +590,9 @@ function openEditor(id, typeKey) {
     const leadVal = sheet.querySelector('#ed-lead')?.value ?? '';
     const rec = { id: it?.id || uid(), type: tkey, person, label, f, notes, photos: editorPhotos.map((p) => p.id), upd: todayISO(), at: Date.now() };
     if (leadVal !== '') rec.lead = leadVal === 'off' ? 'off' : Number(leadVal);
-    if (it) { delete it.lead; Object.assign(it, rec); }
+    const docs = editorPhotos.filter((p) => p.doc);
+    if (docs.length) rec.docs = Object.fromEntries(docs.map((p) => [p.id, p.doc]));
+    if (it) { delete it.lead; delete it.docs; Object.assign(it, rec); }
     else data.items.push(rec);
     persist();
     editorPhotos = null;
@@ -599,7 +623,9 @@ $('photo-input').addEventListener('change', async (e) => {
       const blob = await compressImage(file);
       editorPhotos.push({ id: uid(), blob, url: URL.createObjectURL(blob) });
     } catch (_) {
-      toast('No se ha podido leer una de las fotos.');
+      // No es una imagen que se pueda abrir aquí: se guarda tal cual, como archivo
+      if (file.size > MAX_FILE_MB * 1048576) { toast(`«${file.name}» supera el máximo de ${MAX_FILE_MB} MB.`); continue; }
+      editorPhotos.push({ id: uid(), blob: file, doc: { name: file.name || 'archivo', type: file.type, size: file.size } });
     }
   }
   sheet._drawPhotos();
@@ -629,7 +655,7 @@ function openDetail(id) {
         <dd><button type="button" class="copy" data-copy="${esc(it.f[f.k])}">${esc(value(f, it.f[f.k]))}</button>
           ${f.t === 'tel' ? `<a class="call" href="tel:${esc(it.f[f.k].replace(/[^\d+]/g, ''))}" aria-label="Llamar">${icon('phone', 16)}</a>` : ''}</dd>
       </div>`).join('')}</dl>` : '<p class="muted small">Sin datos todavía. Pulsa «Editar» para completarla.</p>'}
-    ${it.photos.length ? `<div class="photo-grid">${it.photos.map((p, i) => `<button type="button" class="ph" data-view="${i}"><img data-photo="${esc(p)}" alt="Foto ${i + 1}"></button>`).join('')}</div>` : ''}
+    ${it.photos.length ? `<div class="photo-grid">${it.photos.map((p, i) => `<button type="button" class="ph" data-view="${i}">${it.docs?.[p] ? docTile(it.docs[p]) : `<img data-photo="${esc(p)}" alt="Foto ${i + 1}">`}</button>`).join('')}</div>` : ''}
     ${it.notes ? `<div class="notes"><p class="opt-label">Notas</p><p>${esc(it.notes).replace(/\n/g, '<br>')}</p></div>` : ''}
     <p class="muted tiny">Actualizada el ${fmtDate(it.upd)} · toca un dato para copiarlo</p>
     <div class="editor-actions">
@@ -648,30 +674,107 @@ function openDetail(id) {
       toast('No se ha podido copiar');
     }
   }));
-  sheet.querySelectorAll('[data-view]').forEach((b) => b.addEventListener('click', () => openViewer(it.photos, Number(b.dataset.view))));
+  sheet.querySelectorAll('[data-view]').forEach((b) => b.addEventListener('click', () => openViewer(it, Number(b.dataset.view))));
 }
 
-// Visor de fotos a pantalla completa
-function openViewer(photos, start) {
+// Visor a pantalla completa: fotos y PDF (página a página con pdf.js, porque el iPhone solo enseña la
+// primera página de un PDF incrustado). Los demás archivos se abren con el botón de compartir.
+const PDFJS_SRC = 'vendor/pdf.min.js'; // pdf.js 3.11.174 (Apache 2.0), se carga solo al abrir un PDF
+const PDFJS_WORKER = 'vendor/pdf.worker.min.js';
+const MAX_PDF_PAGES = 60;
+const loadScript = (src) => new Promise((resolve, reject) => {
+  const el = document.createElement('script');
+  el.src = src;
+  el.onload = resolve;
+  el.onerror = reject;
+  document.head.append(el);
+});
+
+async function renderPdf(blob, body, alive) {
+  if (!window.pdfjsLib) await loadScript(PDFJS_SRC);
+  window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER;
+  const pdf = await window.pdfjsLib.getDocument({ data: await blob.arrayBuffer() }).promise;
+  body.innerHTML = '<div class="v-pdf"></div>';
+  const box = body.firstElementChild;
+  const width = box.clientWidth * Math.min(window.devicePixelRatio || 1, 2) * 1.5; // nítido sin gastar demasiada memoria
+  for (let n = 1; n <= Math.min(pdf.numPages, MAX_PDF_PAGES) && alive(); n++) {
+    const page = await pdf.getPage(n);
+    const viewport = page.getViewport({ scale: width / page.getViewport({ scale: 1 }).width });
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(viewport.width);
+    canvas.height = Math.round(viewport.height);
+    box.append(canvas);
+    await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+  }
+  if (pdf.numPages > MAX_PDF_PAGES) box.insertAdjacentHTML('beforeend', `<p class="v-msg">Se muestran las primeras ${MAX_PDF_PAGES} páginas de ${pdf.numPages}. Para ver el resto, ábrelo con el botón de compartir.</p>`);
+}
+
+// Menú Compartir en el móvil (abrir con otra app, guardar en Archivos, enviar…); descarga en el ordenador
+async function shareFile(file) {
+  if (matchMedia('(pointer: coarse)').matches && navigator.canShare?.({ files: [file] })) {
+    try {
+      await navigator.share({ files: [file], title: file.name });
+      return;
+    } catch (err) {
+      if (err.name === 'AbortError') return;
+    }
+  }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(file);
+  a.download = file.name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+
+function openViewer(it, start) {
+  const ids = it.photos;
   let i = start;
+  let turn = 0;
+  let current = null; // se prepara al mostrarlo: compartir tiene que ser inmediato tras el toque
   const v = document.createElement('div');
   v.className = 'viewer';
   v.innerHTML = `
-    <img alt="">
+    <div class="v-body"></div>
+    <button class="icon-btn v-share" type="button" aria-label="Compartir o guardar">${icon('share', 20)}</button>
     <button class="icon-btn v-close" type="button" aria-label="Cerrar">${icon('close', 20)}</button>
-    ${photos.length > 1 ? `<button class="icon-btn v-prev" type="button" aria-label="Anterior">${icon('prev', 20)}</button>
+    ${ids.length > 1 ? `<button class="icon-btn v-prev" type="button" aria-label="Anterior">${icon('prev', 20)}</button>
       <button class="icon-btn v-next" type="button" aria-label="Siguiente">${icon('next', 20)}</button>
       <span class="v-count"></span>` : ''}`;
   document.body.append(v);
+  const body = v.querySelector('.v-body');
+  const message = (text) => { body.innerHTML = `<p class="v-msg">${esc(text)}</p>`; };
   const show = async () => {
-    v.querySelector('img').src = (await fileURL(photos[i])) || '';
+    const mine = ++turn;
+    const id = ids[i];
+    const doc = it.docs?.[id];
     const c = v.querySelector('.v-count');
-    if (c) c.textContent = `${i + 1} / ${photos.length}`;
+    if (c) c.textContent = `${i + 1} / ${ids.length}`;
+    current = null;
+    message('Cargando…');
+    const blob = await getFile(id).catch(() => null);
+    if (mine !== turn) return;
+    if (!blob) return message('Este archivo aún no ha llegado a este dispositivo: se descargará con la próxima sincronización.');
+    const name = doc?.name || `${normalize(itemTitle(it)).replace(/[^a-z0-9]+/g, '-')}-${i + 1}.jpg`;
+    current = new File([blob], name, { type: doc?.type || blob.type || 'image/jpeg' });
+    if (!doc) {
+      body.innerHTML = '<img alt="">';
+      body.firstElementChild.src = await fileURL(id);
+    } else if (isPdf(doc)) {
+      try {
+        await renderPdf(blob, body, () => mine === turn && v.isConnected);
+      } catch (err) {
+        console.warn(err);
+        if (mine === turn) message('No se ha podido mostrar este PDF aquí. Ábrelo con el botón de compartir, arriba a la izquierda.');
+      }
+    } else {
+      body.innerHTML = `<div class="v-file">${docTile(doc)}<p class="v-msg">Este archivo no se puede ver aquí. Ábrelo con el botón de compartir, arriba a la izquierda.</p></div>`;
+    }
   };
   v.querySelector('.v-close').addEventListener('click', () => v.remove());
-  v.querySelector('.v-prev')?.addEventListener('click', () => { i = (i - 1 + photos.length) % photos.length; show(); });
-  v.querySelector('.v-next')?.addEventListener('click', () => { i = (i + 1) % photos.length; show(); });
-  v.addEventListener('click', (e) => { if (e.target === v) v.remove(); });
+  v.querySelector('.v-share').addEventListener('click', () => { if (current) shareFile(current); });
+  v.querySelector('.v-prev')?.addEventListener('click', () => { i = (i - 1 + ids.length) % ids.length; show(); });
+  v.querySelector('.v-next')?.addEventListener('click', () => { i = (i + 1) % ids.length; show(); });
+  v.addEventListener('click', (e) => { if (e.target === v || e.target === body) v.remove(); });
   show();
 }
 
@@ -1018,7 +1121,7 @@ $('import-input').addEventListener('change', async (e) => {
     if (obj.app !== 'DocCTRL' || !obj.data) throw new Error('formato');
     const next = cleanData(obj.data);
     const nPhotos = Object.keys(obj.files || {}).length;
-    if (!confirm(`Se importarán ${plural(next.items.length, 'partida', 'partidas')} y ${plural(nPhotos, 'foto', 'fotos')}, y se sustituirá todo lo guardado en este dispositivo. ¿Continuar?`)) return;
+    if (!confirm(`Se importarán ${plural(next.items.length, 'partida', 'partidas')} y ${plural(nPhotos, 'foto o archivo', 'fotos y archivos')}, y se sustituirá todo lo guardado en este dispositivo. ¿Continuar?`)) return;
     await clearFiles();
     urlCache.clear();
     for (const [id, url] of Object.entries(obj.files || {})) await putFile(id, await (await fetch(url)).blob());
@@ -1135,26 +1238,38 @@ function queueSync() {
   syncTimer = setTimeout(() => syncNow(), 1500);
 }
 
-// Fotos: después de los datos (así una foto nunca está en la nube sin una partida que la use).
-// Se suben las que faltan, se bajan las que no hay aquí y se borran las que ya no usa ninguna partida.
+// Fotos y archivos: después de los datos (así nunca están en la nube sin una partida que los use).
+// Se suben los que faltan, se bajan los que no hay aquí y se borran los que ya no usa ninguna partida.
+// Cada uno, ya cifrado, se trocea para no pasar del límite de cada petición: «id», «id-1», «id-2»…
+// El trozo «id» se sube el último, así que si está en la nube es que están todos.
+const FILE_CHUNK = 900000;
+const fileBase = (id) => id.split('-')[0];
+const filePart = (id) => Number(id.split('-')[1]) || 0;
+
 async function syncFiles() {
   const used = new Set(data.items.flatMap((it) => it.photos));
-  const remote = new Set((await syncCall('file-list')).ids);
+  const types = new Map(data.items.flatMap((it) => Object.entries(it.docs || {}).map(([id, doc]) => [id, doc.type])));
+  const ids = (await syncCall('file-list')).ids;
+  const remote = new Set(ids);
   let got = false;
   for (const id of used) {
     const local = await getFile(id).catch(() => null);
     if (remote.has(id) && !local) {
       try {
-        const { blob } = await syncCall('file-get', { id });
-        await putFile(id, new Blob([await decryptBytes(blob)], { type: 'image/jpeg' }));
+        let text = '';
+        for (const part of ids.filter((x) => fileBase(x) === id).sort((a, b) => filePart(a) - filePart(b))) text += (await syncCall('file-get', { id: part })).blob;
+        await putFile(id, new Blob([await decryptBytes(text)], { type: types.get(id) || 'image/jpeg' }));
         got = true;
       } catch (err) { if (err.status !== 404) throw err; }
     } else if (!remote.has(id) && local) {
-      await syncCall('file-put', { id, blob: await encryptBytes(await local.arrayBuffer()) });
+      const text = await encryptBytes(await local.arrayBuffer());
+      for (let n = Math.ceil(text.length / FILE_CHUNK) - 1; n >= 0; n--) {
+        await syncCall('file-put', { id: n ? `${id}-${n}` : id, blob: text.slice(n * FILE_CHUNK, (n + 1) * FILE_CHUNK) });
+      }
     }
   }
-  for (const id of remote) if (!used.has(id)) await syncCall('file-del', { id });
-  // Fotos de este dispositivo que ya no usa ninguna partida (borradas en otro)
+  for (const id of ids) if (!used.has(fileBase(id))) await syncCall('file-del', { id });
+  // Fotos y archivos de este dispositivo que ya no usa ninguna partida (borrados en otro)
   const localIds = await idb('readonly', (st) => st.getAllKeys()).catch(() => []);
   for (const id of localIds) if (!used.has(id)) { await delFile(id).catch(() => {}); urlCache.delete(id); }
   if (got) renderList();

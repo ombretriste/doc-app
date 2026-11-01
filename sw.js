@@ -1,10 +1,12 @@
 // Cambia la versión al modificar archivos para que los móviles descarguen la nueva versión
-const CACHE = 'docctrl-v15';
+const CACHE = 'docctrl-v16';
 const ASSETS = [
   './',
   'index.html',
   'styles.css',
   'app.js',
+  'vendor/pdf.min.js',
+  'vendor/pdf.worker.min.js',
   'manifest.webmanifest',
   'icons/icon.svg',
   'icons/icon-192.png',

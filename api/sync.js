@@ -5,7 +5,7 @@
 //   POST /api/sync { action: 'register', user, auth, invite }  -> crea la cuenta (requiere la clave de registro)
 //   POST /api/sync { action: 'pull', user, auth }              -> { rev, blob, at }
 //   POST /api/sync { action: 'push', user, auth, blob, baseRev } -> { rev } | 409 { rev }
-//   POST /api/sync { action: 'file-put', user, auth, id, blob } -> { ok }   (una foto, cifrada)
+//   POST /api/sync { action: 'file-put', user, auth, id, blob } -> { ok }   (una foto o un trozo de archivo, cifrado)
 //   POST /api/sync { action: 'file-get', user, auth, id }       -> { blob }
 //   POST /api/sync { action: 'file-list', user, auth }          -> { ids }
 //   POST /api/sync { action: 'file-del', user, auth, id }       -> { ok }   (foto que ya no se usa)
@@ -32,8 +32,8 @@ function findRedisEnv(env = process.env) {
 }
 const { url: REDIS_URL, token: REDIS_TOKEN } = findRedisEnv();
 const MAX_BLOB = 2 * 1024 * 1024;
-const MAX_FILE = 3 * 1024 * 1024; // cada foto cifrada (en base64)
-const FILE_ID = /^[a-z0-9]{6,40}$/;
+const MAX_FILE = 3 * 1024 * 1024; // cada foto o trozo de archivo, cifrado (en base64)
+const FILE_ID = /^[a-z0-9]{6,32}(-\d{1,3})?$/; // «id» o «id-1», «id-2»… (trozos de un archivo grande)
 const MAX_FAILS = 10;          // intentos fallidos de contraseña…
 const FAIL_WINDOW_S = 15 * 60; // …por cada 15 minutos
 const HEX64 = /^[a-f0-9]{64}$/;

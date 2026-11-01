@@ -2,7 +2,7 @@
 
 *by OmT Finance*
 
-Versión **0.5.0** (se muestra en la pantalla de inicio). Las correcciones y ajustes suben el último número (0.1.1); las novedades, el del medio (0.2.0).
+Versión **0.6.0** (se muestra en la pantalla de inicio). Las correcciones y ajustes suben el último número (0.1.1); las novedades, el del medio (0.2.0).
 
 App web instalable (PWA) para tener a mano los documentos y datos del día a día de una persona, una pareja o una familia (DNI, carnet de conducir, seguros, ITV, garantías…), con sus fotos y avisos de vencimiento.
 
@@ -20,8 +20,8 @@ App web instalable (PWA) para tener a mano los documentos y datos del día a dí
   - Salud y seguros: seguro médico, seguro de vida, ficha médica.
   - Finanzas: recibo o pago periódico, cuenta bancaria, tarjeta bancaria (solo los últimos 4 dígitos).
   - Otros: garantía, suscripción, mascota, carnet de socio, otro documento.
-- Cada partida tiene sus campos, un nombre opcional, notas y **fotos** (se reducen a 1800 px en JPEG). La fecha marcada con 🔔 es la que genera el aviso.
-- **Ficha**: tocar un dato lo copia; los teléfonos tienen botón de llamar; las fotos se abren a pantalla completa. **Recordatorio** descarga un evento `.ics` para el calendario, con avisos con la antelación elegida y una semana antes.
+- Cada partida tiene sus campos, un nombre opcional, notas y **fotos y archivos**: las fotos se reducen a 1800 px en JPEG; los PDF y demás archivos se guardan tal cual (hasta 25 MB cada uno). La fecha marcada con 🔔 es la que genera el aviso.
+- **Ficha**: tocar un dato lo copia; los teléfonos tienen botón de llamar; las fotos y los PDF se abren a pantalla completa (PDF con pdf.js, en `vendor/`), y el botón de compartir abre o guarda cualquier archivo. **Recordatorio** descarga un evento `.ics` para el calendario, con avisos con la antelación elegida y una semana antes.
 - **Repetición**: recibos, seguros, suscripciones, impuesto de circulación, caldera y vacunas pueden repetirse (cada mes, 2, 3, 6, 12 o 24 meses); al pasar la fecha saltan solos a la siguiente.
 - **Avisos**: cada partida avisa con su antelación (se cambia al editarla: automático, 0–180 días o sin avisos), una semana antes y el mismo día. Por defecto: DNI, pasaporte, NIE y carnet 90 días; seguros, ITV, garantías y tarjetas 30; impuesto de circulación y mascota 15; suscripciones 7; recibos 3; el resto, la antelación general (⋯ → Avisos).
 - Menú ⋯: Personas, Avisos, Sincronización en la nube, Opciones de visualización (oscuro/claro/automático y cuatro fondos: Ámbar, Coral, Menta y Glaciar), Nivel de seguridad, Exportar copia, Importar copia y, con seguridad activada, Bloquear.
@@ -38,7 +38,7 @@ En iPhone/iPad hace falta iOS 16.4 o posterior y abrir la app desde el icono de 
 
 ## Sincronización en la nube
 
-Igual que TaskCTRL y PayCTRL (`api/sync.js`): usuario y contraseña derivan con PBKDF2 una clave de acceso y otra de cifrado (sales `docctrl-…`), los datos se cifran con AES-GCM en el dispositivo y el servidor solo guarda bloques ilegibles. Se fusiona partida a partida (gana el cambio más reciente, los borrados se respetan). Las fotos se cifran y suben una a una (`file-put/get/list/del`, hasta 3 MB cada una). Crear cuenta pide la misma clave de registro que UnderCTRL.
+Igual que TaskCTRL y PayCTRL (`api/sync.js`): usuario y contraseña derivan con PBKDF2 una clave de acceso y otra de cifrado (sales `docctrl-…`), los datos se cifran con AES-GCM en el dispositivo y el servidor solo guarda bloques ilegibles. Se fusiona partida a partida (gana el cambio más reciente, los borrados se respetan). Las fotos y archivos se cifran y suben uno a uno, en trozos de 900 KB (`id`, `id-1`, `id-2`…; `file-put/get/list/del`). Crear cuenta pide la misma clave de registro que UnderCTRL.
 
 ## Configuración en Vercel
 

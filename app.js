@@ -1,7 +1,7 @@
 'use strict';
 
 // Versión de la app (se ve en la pantalla de inicio). Arreglos y ajustes: 0.x.y; novedades: 0.x.0.
-const APP_VERSION = '0.6.0';
+const APP_VERSION = '0.7.0';
 // Uso de la app en Vercel Analytics: es una sola página, así que cada función se cuenta como una
 // página virtual. Solo se envía el nombre de la función, nunca datos de la app.
 const track = (path) => { try { window.va?.('pageview', { path }); } catch (_) { /* sin analítica */ } };
@@ -219,7 +219,8 @@ async function idb(mode, fn, store = 'files') {
 }
 const putFile = (id, blob) => idb('readwrite', (s) => s.put(blob, id));
 const getFile = (id) => idb('readonly', (s) => s.get(id));
-const delFile = (id) => idb('readwrite', (s) => s.delete(id));
+// Al borrar un archivo se borra también su miniatura (en «meta»)
+const delFile = (id) => idb('readwrite', (s) => s.delete(id)).then(() => idb('readwrite', (s) => s.delete(`thumb:${id}`), 'meta'));
 const clearFiles = () => idb('readwrite', (s) => s.clear());
 const kvGet = (k) => idb('readonly', (s) => s.get(k), 'meta');
 const kvSet = (k, v) => idb('readwrite', (s) => s.put(v, k), 'meta');
@@ -245,7 +246,60 @@ function hydratePhotos(root) {
 const MAX_FILE_MB = 25;
 const isPdf = (doc) => doc.type === 'application/pdf' || /\.pdf$/i.test(doc.name);
 const fileExt = (doc) => (doc.name.match(/\.([a-z0-9]{1,5})$/i)?.[1] || 'archivo').toUpperCase();
-const docTile = (doc) => `<span class="doc-tile">${icon('doc', 24)}<b>${esc(fileExt(doc))}</b><small>${esc(doc.name)}</small></span>`;
+const isImageDoc = (doc) => /^image\//.test(doc.type);
+const isTextDoc = (doc) => /^text\//.test(doc.type) || /\.(txt|csv|md|json)$/i.test(doc.name);
+// Recuadro de un archivo: icono, tipo y nombre; si se puede, encima la miniatura (1.ª página del PDF…)
+const docTile = (doc, id) => `<span class="doc-tile" ${id ? `data-thumb="${esc(id)}"` : ''}>${icon('doc', 24)}<b>${esc(fileExt(doc))}</b><small>${esc(doc.name)}</small>${id ? '<img class="doc-thumb" alt="">' : ''}<i class="doc-badge">${esc(fileExt(doc))}</i></span>`;
+// Miniatura de una foto o de un archivo, como en la galería
+const fileTile = (id, doc, src) => (doc ? docTile(doc, id) : `<img ${src ? `src="${esc(src)}"` : `data-photo="${esc(id)}"`} alt="">`);
+
+// Miniaturas de archivos: los PDF se dibujan con pdf.js (1.ª página, 320 px) y las imágenes guardadas como
+// archivo se usan tal cual. Se guardan en IndexedDB («meta» → «thumb:id») para no repetir el trabajo.
+const thumbCache = new Map();
+let thumbQueue = Promise.resolve(); // de una en una: varias a la vez saturan el móvil
+function fileThumb(id, doc, blob) {
+  if (thumbCache.has(id)) return thumbCache.get(id);
+  const job = thumbQueue.then(async () => {
+    const saved = await kvGet(`thumb:${id}`).catch(() => null);
+    if (saved) return URL.createObjectURL(saved);
+    const file = blob || (await getFile(id).catch(() => null));
+    if (!file) return null;
+    let out = null;
+    if (isPdf(doc)) {
+      const pdfjs = await loadPdfjs();
+      const pdf = await pdfjs.getDocument({ data: await file.arrayBuffer() }).promise;
+      const page = await pdf.getPage(1);
+      const viewport = page.getViewport({ scale: 320 / page.getViewport({ scale: 1 }).width });
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(viewport.width);
+      canvas.height = Math.round(viewport.height);
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      await page.render({ canvasContext: ctx, viewport }).promise;
+      out = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.8));
+      pdf.destroy();
+    } else if (isImageDoc(doc)) {
+      out = await compressImage(new File([file], doc.name, { type: doc.type })).catch(() => null);
+    }
+    if (!out) return null;
+    if (!blob) kvSet(`thumb:${id}`, out).catch(() => {}); // los del editor aún no están guardados
+    return URL.createObjectURL(out);
+  }).catch(() => null);
+  thumbQueue = job;
+  thumbCache.set(id, job);
+  return job;
+}
+// Rellena las miniaturas de los archivos de un contenedor (blobs: archivos del editor aún sin guardar)
+function hydrateDocs(root, docsById, blobs = new Map()) {
+  root.querySelectorAll('[data-thumb]').forEach(async (el) => {
+    const doc = docsById[el.dataset.thumb];
+    if (!doc || !(isPdf(doc) || isImageDoc(doc))) return;
+    const url = await fileThumb(el.dataset.thumb, doc, blobs.get(el.dataset.thumb));
+    const img = el.querySelector('.doc-thumb');
+    if (url && img) { img.src = url; el.classList.add('has-thumb'); }
+  });
+}
 
 // Reduce la foto a 1800 px como máximo y la guarda en JPEG
 async function compressImage(file) {
@@ -419,7 +473,7 @@ function renderPeople() {
 // Miniatura de la lista: la primera foto o, si solo hay archivos, el tipo del primero
 function thumb(it) {
   const photo = it.photos.find((id) => !it.docs?.[id]);
-  return photo ? `<img data-photo="${esc(photo)}" alt="">` : `<span class="thumb-doc">${esc(fileExt(it.docs[it.photos[0]]))}</span>`;
+  return photo ? `<img data-photo="${esc(photo)}" alt="">` : docTile(it.docs[it.photos[0]], it.photos[0]);
 }
 
 function itemCard(it) {
@@ -466,6 +520,7 @@ function renderList() {
       </section>`;
   }).join('');
   hydratePhotos(list);
+  hydrateDocs(list, Object.assign({}, ...visibleItems().map((it) => it.docs || {})));
 }
 
 // ---------- Hojas (ventanas inferiores) ----------
@@ -554,10 +609,14 @@ function openEditor(id, typeKey) {
   const drawPhotos = () => {
     const strip = sheet.querySelector('#ed-photos');
     strip.innerHTML = editorPhotos.map((p, i) => `
-      <span class="ph">${p.doc ? docTile(p.doc) : `<img ${p.blob ? `src="${esc(p.url)}"` : `data-photo="${esc(p.id)}"`} alt="">`}
+      <span class="ph"><button type="button" class="ph-open" data-i="${i}" aria-label="Ver">${fileTile(p.id, p.doc, p.doc ? '' : p.url)}</button>
         <button type="button" class="ph-del" data-i="${i}" aria-label="Quitar">${icon('close', 14)}</button></span>`).join('')
       + `<button type="button" class="ph-add" id="ed-add-photo">${icon('camera', 24)}<span>Añadir</span></button>`;
     hydratePhotos(strip);
+    hydrateDocs(strip, Object.fromEntries(editorPhotos.filter((p) => p.doc).map((p) => [p.id, p.doc])), new Map(editorPhotos.filter((p) => p.blob).map((p) => [p.id, p.blob])));
+    strip.querySelectorAll('.ph-open').forEach((b) => b.addEventListener('click', () => {
+      openViewer(editorPhotos.map((p) => ({ id: p.id, doc: p.doc, blob: p.blob })), Number(b.dataset.i), sheet.querySelector('#ed-label').value.trim() || type.label);
+    }));
     strip.querySelectorAll('.ph-del').forEach((b) => b.addEventListener('click', () => {
       editorPhotos.splice(Number(b.dataset.i), 1);
       drawPhotos();
@@ -655,7 +714,7 @@ function openDetail(id) {
         <dd><button type="button" class="copy" data-copy="${esc(it.f[f.k])}">${esc(value(f, it.f[f.k]))}</button>
           ${f.t === 'tel' ? `<a class="call" href="tel:${esc(it.f[f.k].replace(/[^\d+]/g, ''))}" aria-label="Llamar">${icon('phone', 16)}</a>` : ''}</dd>
       </div>`).join('')}</dl>` : '<p class="muted small">Sin datos todavía. Pulsa «Editar» para completarla.</p>'}
-    ${it.photos.length ? `<div class="photo-grid">${it.photos.map((p, i) => `<button type="button" class="ph" data-view="${i}">${it.docs?.[p] ? docTile(it.docs[p]) : `<img data-photo="${esc(p)}" alt="Foto ${i + 1}">`}</button>`).join('')}</div>` : ''}
+    ${it.photos.length ? `<div class="photo-grid">${it.photos.map((p, i) => `<button type="button" class="ph" data-view="${i}">${fileTile(p, it.docs?.[p])}</button>`).join('')}</div>` : ''}
     ${it.notes ? `<div class="notes"><p class="opt-label">Notas</p><p>${esc(it.notes).replace(/\n/g, '<br>')}</p></div>` : ''}
     <p class="muted tiny">Actualizada el ${fmtDate(it.upd)} · toca un dato para copiarlo</p>
     <div class="editor-actions">
@@ -663,6 +722,7 @@ function openDetail(id) {
       <button type="button" class="done-btn" id="dt-edit">${icon('edit', 16)} Editar</button>
     </div>`;
   hydratePhotos(sheet);
+  hydrateDocs(sheet, it.docs || {});
   sheet.querySelector('[data-close]').addEventListener('click', closeSheet);
   sheet.querySelector('#dt-edit').addEventListener('click', () => openEditor(it.id));
   sheet.querySelector('#dt-ics')?.addEventListener('click', () => downloadICS([it]));
@@ -674,11 +734,11 @@ function openDetail(id) {
       toast('No se ha podido copiar');
     }
   }));
-  sheet.querySelectorAll('[data-view]').forEach((b) => b.addEventListener('click', () => openViewer(it, Number(b.dataset.view))));
+  sheet.querySelectorAll('[data-view]').forEach((b) => b.addEventListener('click', () => openViewer(it.photos.map((id) => ({ id, doc: it.docs?.[id] })), Number(b.dataset.view), itemTitle(it))));
 }
 
-// Visor a pantalla completa: fotos y PDF (página a página con pdf.js, porque el iPhone solo enseña la
-// primera página de un PDF incrustado). Los demás archivos se abren con el botón de compartir.
+// Visor a pantalla completa, igual para fotos y archivos: fotos, PDF (página a página con pdf.js, porque el
+// iPhone solo enseña la primera página de un PDF incrustado), imágenes y textos. Arriba, Compartir y Descargar.
 const PDFJS_SRC = 'vendor/pdf.min.js'; // pdf.js 3.11.174 (Apache 2.0), se carga solo al abrir un PDF
 const PDFJS_WORKER = 'vendor/pdf.worker.min.js';
 const MAX_PDF_PAGES = 60;
@@ -689,12 +749,15 @@ const loadScript = (src) => new Promise((resolve, reject) => {
   el.onerror = reject;
   document.head.append(el);
 });
-
-async function renderPdf(blob, body, alive) {
+async function loadPdfjs() {
   if (!window.pdfjsLib) await loadScript(PDFJS_SRC);
   window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER;
-  const pdf = await window.pdfjsLib.getDocument({ data: await blob.arrayBuffer() }).promise;
-  body.innerHTML = '<div class="v-pdf"></div>';
+  return window.pdfjsLib;
+}
+
+async function renderPdf(blob, body, alive) {
+  const pdf = await (await loadPdfjs()).getDocument({ data: await blob.arrayBuffer() }).promise;
+  body.innerHTML = '<div class="v-scroll v-pdf"></div>';
   const box = body.firstElementChild;
   const width = box.clientWidth * Math.min(window.devicePixelRatio || 1, 2) * 1.5; // nítido sin gastar demasiada memoria
   for (let n = 1; n <= Math.min(pdf.numPages, MAX_PDF_PAGES) && alive(); n++) {
@@ -706,28 +769,30 @@ async function renderPdf(blob, body, alive) {
     box.append(canvas);
     await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
   }
-  if (pdf.numPages > MAX_PDF_PAGES) box.insertAdjacentHTML('beforeend', `<p class="v-msg">Se muestran las primeras ${MAX_PDF_PAGES} páginas de ${pdf.numPages}. Para ver el resto, ábrelo con el botón de compartir.</p>`);
+  if (pdf.numPages > MAX_PDF_PAGES) box.insertAdjacentHTML('beforeend', `<p class="v-msg">Se muestran las primeras ${MAX_PDF_PAGES} páginas de ${pdf.numPages}. Para ver el resto, compártelo o descárgalo.</p>`);
 }
 
-// Menú Compartir en el móvil (abrir con otra app, guardar en Archivos, enviar…); descarga en el ordenador
+// Compartir: el menú del sistema (abrir con otra app, guardar en Archivos, enviar por WhatsApp…)
+const canShareFile = (file) => { try { return !!navigator.canShare?.({ files: [file] }); } catch (_) { return false; } };
 async function shareFile(file) {
-  if (matchMedia('(pointer: coarse)').matches && navigator.canShare?.({ files: [file] })) {
-    try {
-      await navigator.share({ files: [file], title: file.name });
-      return;
-    } catch (err) {
-      if (err.name === 'AbortError') return;
-    }
+  try {
+    await navigator.share({ files: [file], title: file.name });
+  } catch (err) {
+    if (err.name !== 'AbortError') downloadFile(file);
   }
+}
+function downloadFile(file) {
   const a = document.createElement('a');
   a.href = URL.createObjectURL(file);
   a.download = file.name;
+  document.body.append(a);
   a.click();
-  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 60000);
 }
 
-function openViewer(it, start) {
-  const ids = it.photos;
+// entries: [{id, doc?, blob?}] (sin blob se lee del dispositivo) · title: nombre de la partida
+function openViewer(entries, start, title) {
   let i = start;
   let turn = 0;
   let current = null; // se prepara al mostrarlo: compartir tiene que ser inmediato tras el toque
@@ -735,45 +800,62 @@ function openViewer(it, start) {
   v.className = 'viewer';
   v.innerHTML = `
     <div class="v-body"></div>
-    <button class="icon-btn v-share" type="button" aria-label="Compartir o guardar">${icon('share', 20)}</button>
-    <button class="icon-btn v-close" type="button" aria-label="Cerrar">${icon('close', 20)}</button>
-    ${ids.length > 1 ? `<button class="icon-btn v-prev" type="button" aria-label="Anterior">${icon('prev', 20)}</button>
-      <button class="icon-btn v-next" type="button" aria-label="Siguiente">${icon('next', 20)}</button>
-      <span class="v-count"></span>` : ''}`;
+    <div class="v-top">
+      <button class="v-act v-share" type="button" hidden>${icon('share', 18)}<span>Compartir</span></button>
+      <button class="v-act v-down" type="button">${icon('download', 18)}<span>Descargar</span></button>
+      <button class="icon-btn v-close" type="button" aria-label="Cerrar">${icon('close', 20)}</button>
+    </div>
+    <div class="v-bottom">
+      ${entries.length > 1 ? `<button class="icon-btn v-prev" type="button" aria-label="Anterior">${icon('prev', 20)}</button>` : ''}
+      <span class="v-name"></span>
+      ${entries.length > 1 ? `<button class="icon-btn v-next" type="button" aria-label="Siguiente">${icon('next', 20)}</button>` : ''}
+    </div>`;
   document.body.append(v);
   const body = v.querySelector('.v-body');
   const message = (text) => { body.innerHTML = `<p class="v-msg">${esc(text)}</p>`; };
+  const setActions = () => {
+    v.querySelector('.v-share').hidden = !(current && canShareFile(current));
+    v.querySelector('.v-down').disabled = !current;
+  };
   const show = async () => {
     const mine = ++turn;
-    const id = ids[i];
-    const doc = it.docs?.[id];
-    const c = v.querySelector('.v-count');
-    if (c) c.textContent = `${i + 1} / ${ids.length}`;
+    const { id, doc, blob: given } = entries[i];
+    const slug = normalize(title || 'docctrl').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'docctrl';
+    const name = doc?.name || `${slug}-${i + 1}.jpg`;
+    v.querySelector('.v-name').textContent = `${entries.length > 1 ? `${i + 1}/${entries.length} · ` : ''}${name}`;
     current = null;
+    setActions();
     message('Cargando…');
-    const blob = await getFile(id).catch(() => null);
+    const blob = given || (await getFile(id).catch(() => null));
     if (mine !== turn) return;
     if (!blob) return message('Este archivo aún no ha llegado a este dispositivo: se descargará con la próxima sincronización.');
-    const name = doc?.name || `${normalize(itemTitle(it)).replace(/[^a-z0-9]+/g, '-')}-${i + 1}.jpg`;
     current = new File([blob], name, { type: doc?.type || blob.type || 'image/jpeg' });
-    if (!doc) {
+    setActions();
+    const url = URL.createObjectURL(blob);
+    if (!doc || isImageDoc(doc)) {
       body.innerHTML = '<img alt="">';
-      body.firstElementChild.src = await fileURL(id);
+      const img = body.firstElementChild;
+      img.onerror = () => { if (mine === turn) message('Esta imagen no se puede ver aquí: compártela o descárgala para abrirla con otra app.'); };
+      img.src = url;
     } else if (isPdf(doc)) {
       try {
         await renderPdf(blob, body, () => mine === turn && v.isConnected);
       } catch (err) {
         console.warn(err);
-        if (mine === turn) message('No se ha podido mostrar este PDF aquí. Ábrelo con el botón de compartir, arriba a la izquierda.');
+        if (mine === turn) message('No se ha podido mostrar este PDF aquí (¿tiene contraseña?): compártelo o descárgalo para abrirlo con otra app.');
       }
+    } else if (isTextDoc(doc) && blob.size < 500000) {
+      body.innerHTML = '<pre class="v-scroll v-text"></pre>';
+      body.firstElementChild.textContent = await blob.text();
     } else {
-      body.innerHTML = `<div class="v-file">${docTile(doc)}<p class="v-msg">Este archivo no se puede ver aquí. Ábrelo con el botón de compartir, arriba a la izquierda.</p></div>`;
+      body.innerHTML = `<div class="v-file">${docTile(doc)}<p class="v-msg">Este tipo de archivo no se puede ver dentro de la app: compártelo o descárgalo para abrirlo con otra app.</p></div>`;
     }
   };
   v.querySelector('.v-close').addEventListener('click', () => v.remove());
   v.querySelector('.v-share').addEventListener('click', () => { if (current) shareFile(current); });
-  v.querySelector('.v-prev')?.addEventListener('click', () => { i = (i - 1 + ids.length) % ids.length; show(); });
-  v.querySelector('.v-next')?.addEventListener('click', () => { i = (i + 1) % ids.length; show(); });
+  v.querySelector('.v-down').addEventListener('click', () => { if (current) downloadFile(current); });
+  v.querySelector('.v-prev')?.addEventListener('click', () => { i = (i - 1 + entries.length) % entries.length; show(); });
+  v.querySelector('.v-next')?.addEventListener('click', () => { i = (i + 1) % entries.length; show(); });
   v.addEventListener('click', (e) => { if (e.target === v || e.target === body) v.remove(); });
   show();
 }

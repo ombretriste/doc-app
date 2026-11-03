@@ -1,7 +1,7 @@
 'use strict';
 
 // Versión de la app (se ve en la pantalla de inicio). Arreglos y ajustes: 0.x.y; novedades: 0.x.0.
-const APP_VERSION = '0.7.0';
+const APP_VERSION = '0.7.1';
 // Uso de la app en Vercel Analytics: es una sola página, así que cada función se cuenta como una
 // página virtual. Solo se envía el nombre de la función, nunca datos de la app.
 const track = (path) => { try { window.va?.('pageview', { path }); } catch (_) { /* sin analítica */ } };
@@ -267,7 +267,7 @@ function fileThumb(id, doc, blob) {
     let out = null;
     if (isPdf(doc)) {
       const pdfjs = await loadPdfjs();
-      const pdf = await pdfjs.getDocument({ data: await file.arrayBuffer() }).promise;
+      const pdf = await pdfjs.getDocument({ data: await file.arrayBuffer(), isEvalSupported: false }).promise;
       const page = await pdf.getPage(1);
       const viewport = page.getViewport({ scale: 320 / page.getViewport({ scale: 1 }).width });
       const canvas = document.createElement('canvas');
@@ -749,6 +749,7 @@ const loadScript = (src) => new Promise((resolve, reject) => {
   el.onerror = reject;
   document.head.append(el);
 });
+// isEvalSupported: false en getDocument: la política de seguridad (CSP) no permite eval
 async function loadPdfjs() {
   if (!window.pdfjsLib) await loadScript(PDFJS_SRC);
   window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER;
@@ -756,7 +757,7 @@ async function loadPdfjs() {
 }
 
 async function renderPdf(blob, body, alive) {
-  const pdf = await (await loadPdfjs()).getDocument({ data: await blob.arrayBuffer() }).promise;
+  const pdf = await (await loadPdfjs()).getDocument({ data: await blob.arrayBuffer(), isEvalSupported: false }).promise;
   body.innerHTML = '<div class="v-scroll v-pdf"></div>';
   const box = body.firstElementChild;
   const width = box.clientWidth * Math.min(window.devicePixelRatio || 1, 2) * 1.5; // nítido sin gastar demasiada memoria

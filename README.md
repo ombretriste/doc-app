@@ -2,7 +2,7 @@
 
 *by OmT Finance*
 
-Versión **0.7.1** (se muestra en la pantalla de inicio). Las correcciones y ajustes suben el último número (0.1.1); las novedades, el del medio (0.2.0).
+Versión **0.8.0** (se muestra en la pantalla de inicio). Las correcciones y ajustes suben el último número (0.1.1); las novedades, el del medio (0.2.0).
 
 App web instalable (PWA) para tener a mano los documentos y datos del día a día de una persona, una pareja o una familia (DNI, carnet de conducir, seguros, ITV, garantías…), con sus fotos y avisos de vencimiento.
 
@@ -46,14 +46,14 @@ Igual que TaskCTRL y PayCTRL (`api/sync.js`): usuario y contraseña derivan con 
 2. Comprueba `https://<tu-app>.vercel.app/api/push` y `/api/sync`: deben decir `"configured": true`. Si no, la lista `vars` muestra qué variables ve el servidor.
 3. El cron diario se crea solo con `vercel.json`. (Opcional: un cron en cron-job.org a `/api/push?run` lo hace más puntual.)
 
-Los datos se guardan en el propio dispositivo: los campos en `localStorage` (`docctrl:v1`) y las fotos en IndexedDB (`docctrl`). La copia exportada es un `.json` con todo, fotos incluidas. Con la sincronización activada, se suben a la nube cifrados.
+Los datos se guardan en el propio dispositivo: los campos en `localStorage` (`docctrl:v1`) y las fotos en IndexedDB (`docctrl`). La copia exportada es un `.json` cifrado con contraseña, con todo (fotos y archivos incluidos). Con la sincronización activada, se suben a la nube cifrados.
 
 ## Seguridad
 
 - **En el dispositivo**: los datos están en `localStorage` e IndexedDB del navegador, aislados de otras webs y apps y protegidos por el bloqueo del móvil. El nivel de seguridad de la app (Face ID o código) impide abrirla, pero no cifra lo guardado.
 - **En la nube**: todo (datos, fotos y archivos) se cifra en el dispositivo (AES-GCM, clave PBKDF2 de 310 000 iteraciones a partir de la contraseña); el servidor solo ve bloques ilegibles y limita los intentos de contraseña (10 cada 15 minutos). Los avisos push solo conocen los días en que toca avisar.
 - **Política de seguridad (CSP) y cabeceras** en `vercel.json`, como en UnderCTRL: solo se ejecuta código de la propia app (nada en línea: lo que iba en `index.html` está en `boot.js`), solo se conecta a su propio servidor, no se puede incrustar en otra web (`frame-ancestors 'none'`), `nosniff` y `no-referrer`. pdf.js funciona sin `eval` (`isEvalSupported: false`).
-- **Copia exportada**: el `.json` va sin cifrar (con fotos y archivos): guárdalo en un sitio seguro.
+- **Copia exportada** (⋯ → Exportar copia): se cifra con una contraseña que se elige al exportar (AES-GCM, clave PBKDF2-SHA256 de 310 000 iteraciones con sal aleatoria; formato `{app, enc: 1, kdf: {iter, salt}, iv, ct}`). Sin la contraseña no se puede abrir ni recuperar. Al importar se pide la contraseña; las copias antiguas sin cifrar se siguen pudiendo importar.
 
 ## Analítica
 

@@ -1,7 +1,7 @@
 'use strict';
 
 // Versión de la app (se ve en la pantalla de inicio). Arreglos y ajustes: 0.x.y; novedades: 0.x.0.
-const APP_VERSION = '0.7.1';
+const APP_VERSION = '0.8.0';
 // Uso de la app en Vercel Analytics: es una sola página, así que cada función se cuenta como una
 // página virtual. Solo se envía el nombre de la función, nunca datos de la app.
 const track = (path) => { try { window.va?.('pageview', { path }); } catch (_) { /* sin analítica */ } };
@@ -1165,42 +1165,145 @@ function openNotifSheet() {
   });
 }
 
-// ---------- Copia de seguridad (JSON con fotos) ----------
+// ---------- Copia de seguridad (JSON con fotos y archivos, cifrada con contraseña) ----------
+// La copia se cifra con una contraseña que se elige al exportar: AES-GCM con una clave PBKDF2
+// (310 000 iteraciones, sal aleatoria). Formato: {app, enc: 1, version, exported, kdf: {iter, salt}, iv, ct}
+// donde ct es el JSON de siempre ({app, version, exported, data, files}) cifrado. Las copias antiguas
+// sin cifrar se siguen pudiendo importar.
 
 const blobToDataURL = (blob) => new Promise((resolve) => { const r = new FileReader(); r.onload = () => resolve(r.result); r.readAsDataURL(blob); });
+const BACKUP_ITERATIONS = 310000;
 
-async function exportBackup() {
-  toast('Preparando la copia…');
+async function backupKey(password, salt, iter) {
+  const base = await crypto.subtle.importKey('raw', utf8.encode(password), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey({ name: 'PBKDF2', hash: 'SHA-256', salt, iterations: iter }, base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+}
+async function encryptBackup(json, password) {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, await backupKey(password, salt, BACKUP_ITERATIONS), utf8.encode(json));
+  return JSON.stringify({ app: 'DocCTRL', enc: 1, version: APP_VERSION, exported: new Date().toISOString(), kdf: { name: 'PBKDF2-SHA256', iter: BACKUP_ITERATIONS, salt: toB64(salt) }, iv: toB64(iv), ct: toB64(ct) });
+}
+// Devuelve el JSON de dentro; con una contraseña incorrecta, AES-GCM falla (OperationError)
+async function decryptBackup(obj, password) {
+  const iter = Number(obj.kdf?.iter) || BACKUP_ITERATIONS;
+  const key = await backupKey(password, fromB64(obj.kdf.salt), iter);
+  const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64(obj.iv) }, key, fromB64(obj.ct));
+  return JSON.parse(new TextDecoder().decode(plain));
+}
+
+async function buildBackupJSON() {
   const files = {};
   for (const it of data.items) for (const p of it.photos) {
     const blob = await getFile(p).catch(() => null);
     if (blob) files[p] = await blobToDataURL(blob);
   }
-  const json = JSON.stringify({ app: 'DocCTRL', version: APP_VERSION, exported: new Date().toISOString(), data, files });
-  const name = `docctrl-copia-${todayISO()}.json`;
-  const file = new File([json], name, { type: 'application/json' });
-  // En el móvil, el menú Compartir permite «Guardar en Archivos» o enviarlo
-  if (matchMedia('(pointer: coarse)').matches && navigator.canShare?.({ files: [file] })) {
+  return JSON.stringify({ app: 'DocCTRL', version: APP_VERSION, exported: new Date().toISOString(), data, files });
+}
+const fmtMB = (bytes) => (bytes < 1048576 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / 1048576).toLocaleString('es-ES', { maximumFractionDigits: 1 })} MB`);
+
+// Paso 1: contraseña y cifrado · Paso 2: botones para guardar o compartir (el iPhone solo deja
+// compartir justo después de un toque, y cifrar tarda un momento)
+function exportBackup() {
+  const sheet = openSheet('', 'Exportar copia');
+  const head = `
+    <div class="sheet-head">
+      <h2 class="sheet-title">Exportar copia</h2>
+      <button type="button" class="icon-btn sm" data-close aria-label="Cerrar">${icon('close', 18)}</button>
+    </div>`;
+  sheet.innerHTML = `${head}
+    <p class="muted small">La copia lleva todas tus partidas, fotos y archivos, y se cifra con la contraseña que elijas: sin ella nadie puede abrirla. <b>Apúntala en un sitio seguro: si la olvidas, la copia no se puede recuperar.</b></p>
+    <label class="fld"><span>Contraseña de la copia</span><input id="b-pass" type="password" autocomplete="new-password" maxlength="128"></label>
+    <label class="fld"><span>Repite la contraseña</span><input id="b-pass2" type="password" autocomplete="new-password" maxlength="128"></label>
+    <p class="form-error" id="b-error" role="alert"></p>
+    <div class="body-actions"><button type="button" class="done-btn" id="b-go">${icon('download', 17)} Preparar copia cifrada</button></div>`;
+  const q = (sel) => sheet.querySelector(sel);
+  q('[data-close]').addEventListener('click', closeSheet);
+  q('#b-pass').focus();
+  q('#b-go').addEventListener('click', async () => {
+    const pass = q('#b-pass').value;
+    if (pass.length < 8) return void (q('#b-error').textContent = 'La contraseña debe tener al menos 8 caracteres.');
+    if (pass !== q('#b-pass2').value) return void (q('#b-error').textContent = 'Las contraseñas no coinciden.');
+    const btn = q('#b-go');
+    btn.disabled = true;
+    btn.textContent = 'Cifrando la copia…';
+    q('#b-error').textContent = '';
+    let file;
     try {
-      await navigator.share({ files: [file], title: 'Copia de DocCTRL' });
-      return;
+      file = new File([await encryptBackup(await buildBackupJSON(), pass)], `docctrl-copia-${todayISO()}.json`, { type: 'application/json' });
     } catch (err) {
-      if (err.name === 'AbortError') return;
+      console.warn(err);
+      btn.disabled = false;
+      btn.textContent = 'Preparar copia cifrada';
+      return void (q('#b-error').textContent = 'No se ha podido preparar la copia (¿falta memoria?).');
     }
-  }
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(file);
-  a.download = name;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    sheet.innerHTML = `${head}
+      <div class="notif-status ok">${icon('check', 22)}<span><b>Copia cifrada lista</b><small>${esc(file.name)} · ${fmtMB(file.size)}</small></span></div>
+      <p class="muted small">Guárdala en Archivos, en tu nube o envíatela. Para recuperarla: ⋯ → Importar copia, y su contraseña.</p>
+      <div class="row-btns">
+        ${canShareFile(file) ? `<button type="button" class="done-btn" data-share>${icon('share', 17)} Compartir o guardar</button>` : ''}
+        <button type="button" class="ghost-btn" data-down>${icon('download', 17)} Descargar</button>
+      </div>
+      <div class="body-actions"><button type="button" class="ghost-btn" data-close>Listo</button></div>`;
+    sheet.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', closeSheet));
+    sheet.querySelector('[data-share]')?.addEventListener('click', () => shareFile(file));
+    sheet.querySelector('[data-down]').addEventListener('click', () => downloadFile(file));
+  });
+}
+
+// Pide la contraseña de una copia cifrada; devuelve su contenido o null si se cancela
+function askBackupPassword(obj) {
+  return new Promise((resolve) => {
+    const sheet = openSheet('', 'Importar copia');
+    sheet.innerHTML = `
+      <h2 class="sheet-title">Copia cifrada</h2>
+      <p class="muted small">Escribe la contraseña que elegiste al exportar esta copia${obj.exported ? ` (del ${esc(new Date(obj.exported).toLocaleDateString('es-ES'))})` : ''}.</p>
+      <label class="fld"><span>Contraseña de la copia</span><input id="b-pass" type="password" autocomplete="current-password" maxlength="128"></label>
+      <p class="form-error" id="b-error" role="alert"></p>
+      <div class="editor-actions">
+        <button class="ghost-btn" type="button" data-cancel>Cancelar</button>
+        <button class="done-btn" type="button" id="b-go">Abrir copia</button>
+      </div>`;
+    const q = (sel) => sheet.querySelector(sel);
+    let done = false;
+    const finish = (value) => { if (done) return; done = true; closeSheet(); resolve(value); };
+    // Cerrar la hoja tocando fuera también cancela
+    sheet.parentElement.addEventListener('click', (e) => { if (e.target === sheet.parentElement) finish(null); });
+    q('[data-cancel]').addEventListener('click', () => finish(null));
+    const go = async () => {
+      const btn = q('#b-go');
+      btn.disabled = true;
+      btn.textContent = 'Abriendo…';
+      try {
+        finish(await decryptBackup(obj, q('#b-pass').value));
+      } catch (_) {
+        q('#b-error').textContent = 'Contraseña incorrecta.';
+        btn.disabled = false;
+        btn.textContent = 'Abrir copia';
+      }
+    };
+    q('#b-go').addEventListener('click', go);
+    q('#b-pass').addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
+    q('#b-pass').focus();
+  });
 }
 
 $('import-input').addEventListener('change', async (e) => {
   const file = e.target.files[0];
   e.target.value = '';
   if (!file) return;
+  let obj;
   try {
-    const obj = JSON.parse(await file.text());
+    obj = JSON.parse(await file.text());
+    if (obj.app !== 'DocCTRL' || !(obj.data || obj.enc)) throw new Error('formato');
+  } catch (_) {
+    return alert('El archivo no es una copia válida de DocCTRL.');
+  }
+  if (obj.enc) {
+    obj = await askBackupPassword(obj);
+    if (!obj) return;
+  }
+  try {
     if (obj.app !== 'DocCTRL' || !obj.data) throw new Error('formato');
     const next = cleanData(obj.data);
     const nPhotos = Object.keys(obj.files || {}).length;
